@@ -1,0 +1,123 @@
+{
+ "actions": [],
+ "creation": "2026-08-11 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item",
+  "item_name",
+  "uom",
+  "barcode",
+  "barcode_type",
+  "barcode_uom",
+  "no_of_barcodes",
+  "price_list",
+  "rate",
+  "source_row_name",
+  "max_allowed"
+ ],
+ "fields": [
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "item.item_name",
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Item Name",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "item.stock_uom",
+   "fieldname": "uom",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "UOM",
+   "options": "UOM",
+   "read_only": 1
+  },
+  {
+   "fieldname": "barcode",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Barcode",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "description": "Optional - if blank, the format is auto-detected from the Barcode value when printing.",
+   "fieldname": "barcode_type",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Barcode Type",
+   "read_only": 1
+  },
+  {
+   "fieldname": "barcode_uom",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Barcode UOM",
+   "options": "UOM",
+   "read_only": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "no_of_barcodes",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "No. of Barcodes",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "description": "Defaults from Barcode Print Settings - change it here to price this row from a different Price List.",
+   "fieldname": "price_list",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Price List",
+   "options": "Price List"
+  },
+  {
+   "description": "Auto-fetched from the Price List above. Shows N/A on the printed label if no price is found there.",
+   "fieldname": "rate",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Rate / Price",
+   "read_only": 1
+  },
+  {
+   "description": "Set only when this row was pre-filled from a Purchase Order/Purchase Receipt line - identifies which line's printed-barcode counter to increment after a successful print.",
+   "fieldname": "source_row_name",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Source Row Name",
+   "read_only": 1
+  },
+  {
+   "description": "Set only when pre-filled from a Purchase Order/Purchase Receipt line - the most labels this line may still print (line quantity + Max Extra Barcodes per Line, minus what's already been printed).",
+   "fieldname": "max_allowed",
+   "fieldtype": "Int",
+   "hidden": 1,
+   "label": "Max Allowed",
+   "read_only": 1
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-17 01:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Barcodes Print",
+ "name": "Print Label Item",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

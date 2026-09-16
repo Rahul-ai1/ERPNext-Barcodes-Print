@@ -25,7 +25,7 @@ var/
 .idea/
 
 # Proprietary, license-gated vendor SDK - see public/js/vendor/README.md
-barcode_print_manager/public/js/vendor/BrowserPrint-*.min.js
+barcodes_print/public/js/vendor/BrowserPrint-*.min.js
 
 # Local no-hardware test rig output (captured ZPL from the CUPS virtual printer)
 test_prints/

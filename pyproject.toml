@@ -1,6 +1,6 @@
 [project]
-name = "barcode_print_manager"
-authors = [{ name = "Yash", email = "yash@example.com" }]
+name = "barcodes_print"
+authors = [{ name = "Auriga IT", email = "rahul.chaudhary@aurigait.com" }]
 description = "Generate and print barcode labels for thermal barcode printers"
 requires-python = ">=3.10"
 readme = "README.md"

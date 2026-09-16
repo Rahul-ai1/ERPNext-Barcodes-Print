@@ -1,0 +1,19 @@
+{
+ "color": "#2f7d6c",
+ "creation": "2026-09-17 00:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Number Card",
+ "dynamic_filters_json": "[]",
+ "filters_json": "[]",
+ "is_public": 1,
+ "is_standard": 1,
+ "label": "Print Jobs Today",
+ "method": "barcodes_print.api.dashboard.print_jobs_today",
+ "modified": "2026-09-17 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Barcodes Print",
+ "name": "Print Jobs Today",
+ "owner": "Administrator",
+ "show_percentage_stats": 0,
+ "type": "Custom"
+}

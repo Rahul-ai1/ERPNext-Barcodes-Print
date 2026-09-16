@@ -1,0 +1,66 @@
+{
+ "app": "barcodes_print",
+ "creation": "2026-09-16 00:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Workspace Sidebar",
+ "header_icon": "printer",
+ "idx": 0,
+ "module_onboarding": "",
+ "items": [
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "home",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Home",
+   "link_to": "Barcodes Print",
+   "link_type": "Workspace",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "printer",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Print Barcode",
+   "link_to": "print-barcode",
+   "link_type": "Page",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "settings",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Barcode Print Settings",
+   "link_to": "Barcode Print Settings",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "history",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Barcode Print Log",
+   "link_to": "Barcode Print Log",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-09-16 03:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Barcodes Print",
+ "name": "Barcodes Print",
+ "owner": "Administrator",
+ "standard": 1,
+ "title": "Barcodes Print"
+}

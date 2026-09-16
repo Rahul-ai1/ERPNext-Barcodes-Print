@@ -1,0 +1,207 @@
+{
+ "actions": [],
+ "creation": "2026-08-11 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "connector_section",
+  "print_connector",
+  "default_label_printer",
+  "column_break_connector",
+  "printer_dpi",
+  "label_size_section",
+  "small_width_mm",
+  "small_height_mm",
+  "column_break_label_size_1",
+  "medium_width_mm",
+  "medium_height_mm",
+  "column_break_label_size_2",
+  "large_width_mm",
+  "large_height_mm",
+  "display_section",
+  "display_rules",
+  "pricing_section",
+  "default_price_list",
+  "purchase_section",
+  "enable_purchase_document_printing",
+  "purchase_document_type",
+  "column_break_purchase",
+  "max_extra_barcodes_per_line"
+ ],
+ "fields": [
+  {
+   "fieldname": "connector_section",
+   "fieldtype": "Section Break",
+   "label": "Printing"
+  },
+  {
+   "default": "QZ Tray",
+   "fieldname": "print_connector",
+   "fieldtype": "Select",
+   "label": "Print Connector",
+   "options": "QZ Tray\nZebra Browser Print",
+   "reqd": 1
+  },
+  {
+   "description": "Exact printer name as it appears on the user's PC. If left blank, the user is prompted to pick a printer via the selected connector at print time.",
+   "fieldname": "default_label_printer",
+   "fieldtype": "Data",
+   "label": "Default Label Printer"
+  },
+  {
+   "fieldname": "column_break_connector",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "203",
+   "description": "DPI (dots per inch) of the label printer. Used to convert label sizes from mm to dots for ZPL. Most desktop thermal label printers (e.g. Zebra ZP 450, GC420t) are 203 DPI.",
+   "fieldname": "printer_dpi",
+   "fieldtype": "Select",
+   "label": "Printer DPI",
+   "options": "203\n300\n600",
+   "reqd": 1
+  },
+  {
+   "fieldname": "label_size_section",
+   "fieldtype": "Section Break",
+   "label": "Label Dimensions (mm)"
+  },
+  {
+   "default": "50",
+   "fieldname": "small_width_mm",
+   "fieldtype": "Float",
+   "label": "Small - Width (mm)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "25",
+   "fieldname": "small_height_mm",
+   "fieldtype": "Float",
+   "label": "Small - Height (mm)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_label_size_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "75",
+   "fieldname": "medium_width_mm",
+   "fieldtype": "Float",
+   "label": "Medium - Width (mm)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "50",
+   "fieldname": "medium_height_mm",
+   "fieldtype": "Float",
+   "label": "Medium - Height (mm)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_label_size_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "100",
+   "fieldname": "large_width_mm",
+   "fieldtype": "Float",
+   "label": "Large - Width (mm)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "75",
+   "fieldname": "large_height_mm",
+   "fieldtype": "Float",
+   "label": "Large - Height (mm)",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "display_section",
+   "fieldtype": "Section Break",
+   "label": "Label Content (per size)"
+  },
+  {
+   "description": "One row per label size - check what shows on that size's label, and pick its alignment. A field can be off for Small but on for Medium/Large.",
+   "fieldname": "display_rules",
+   "fieldtype": "Table",
+   "label": "Display Rules",
+   "options": "Barcode Label Display Rule"
+  },
+  {
+   "fieldname": "pricing_section",
+   "fieldtype": "Section Break",
+   "label": "Pricing"
+  },
+  {
+   "description": "Used to auto-fetch each item's rate on the Print Barcode page whenever a label size's Display Rules show Rate. Can be overridden per row at print time. If no price is found for an item in the chosen Price List, the label prints \"N/A\" instead of a rate.",
+   "fieldname": "default_price_list",
+   "fieldtype": "Link",
+   "label": "Default Price List",
+   "options": "Price List"
+  },
+  {
+   "fieldname": "purchase_section",
+   "fieldtype": "Section Break",
+   "label": "Purchase Document Printing"
+  },
+  {
+   "default": "0",
+   "description": "Adds a Print Barcode button directly on submitted documents of the chosen Purchase Document Type, pre-filled with that document's items. The standalone Print Barcode page keeps working either way - this is purely additive.",
+   "fieldname": "enable_purchase_document_printing",
+   "fieldtype": "Check",
+   "label": "Enable Printing From a Purchase Document"
+  },
+  {
+   "depends_on": "eval:doc.enable_purchase_document_printing",
+   "description": "Only one at a time - matches whichever document your purchase flow actually submits.",
+   "fieldname": "purchase_document_type",
+   "fieldtype": "Select",
+   "label": "Purchase Document Type",
+   "mandatory_depends_on": "eval:doc.enable_purchase_document_printing",
+   "options": "\nPurchase Order\nPurchase Receipt"
+  },
+  {
+   "fieldname": "column_break_purchase",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.enable_purchase_document_printing",
+   "description": "How many MORE labels than a line's quantity may be printed in total (e.g. for spares/damaged replacements). 0 = exactly the line quantity, no extras.",
+   "fieldname": "max_extra_barcodes_per_line",
+   "fieldtype": "Int",
+   "label": "Max Extra Barcodes per Line",
+   "non_negative": 1
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-09-17 01:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Barcodes Print",
+ "name": "Barcode Print Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

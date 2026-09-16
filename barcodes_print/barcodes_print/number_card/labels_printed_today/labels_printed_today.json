@@ -1,0 +1,19 @@
+{
+ "color": "#3d6fa8",
+ "creation": "2026-09-17 00:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Number Card",
+ "dynamic_filters_json": "[]",
+ "filters_json": "[]",
+ "is_public": 1,
+ "is_standard": 1,
+ "label": "Labels Printed Today",
+ "method": "barcodes_print.api.dashboard.labels_printed_today",
+ "modified": "2026-09-17 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Barcodes Print",
+ "name": "Labels Printed Today",
+ "owner": "Administrator",
+ "show_percentage_stats": 0,
+ "type": "Custom"
+}

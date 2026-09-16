@@ -1,0 +1,105 @@
+{
+ "actions": [],
+ "creation": "2026-09-17 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "label_size",
+  "alignment",
+  "column_break_main",
+  "show_item_name",
+  "show_item_code",
+  "column_break_display_1",
+  "show_barcode_number",
+  "show_barcode_type",
+  "column_break_display_2",
+  "show_uom",
+  "show_rate"
+ ],
+ "fields": [
+  {
+   "fieldname": "label_size",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Size",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "default": "Left",
+   "description": "Applies to both the text lines and the barcode itself on this size's label.",
+   "fieldname": "alignment",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Alignment",
+   "options": "Left\nCenter\nRight",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "show_item_name",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Item Name"
+  },
+  {
+   "default": "1",
+   "fieldname": "show_item_code",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Item Code"
+  },
+  {
+   "fieldname": "column_break_display_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "show_barcode_number",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Barcode Number"
+  },
+  {
+   "default": "1",
+   "fieldname": "show_barcode_type",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Barcode Type"
+  },
+  {
+   "fieldname": "column_break_display_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "show_uom",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "UOM"
+  },
+  {
+   "default": "0",
+   "fieldname": "show_rate",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Rate / Price"
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-17 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Barcodes Print",
+ "name": "Barcode Label Display Rule",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "ASC",
+ "states": []
+}
