@@ -82,14 +82,11 @@ Built and tested against **Frappe v16.26 / ERPNext v16.26**. The app's own code 
 ## Install
 
 ```bash
-rm -rf apps/barcodes_print apps/ERPNext-Barcodes-Print
 bench get-app https://github.com/Rahul-ai1/ERPNext-Barcodes-Print.git
 bench --site <your-site> install-app barcodes_print
 bench --site <your-site> migrate
 bench restart
 ```
-
-Requires a working Frappe bench with **ERPNext already installed** on the target site. The `migrate` step creates every doctype and seeds Barcode Print Settings with sensible defaults (QZ Tray, 203 DPI, standard Small/Medium/Large dimensions, all display toggles on except Rate) — nothing further to configure before using it, though every default is adjustable afterward in **Barcode Print Settings**. Each end user's own PC additionally needs the one-time QZ Tray setup above before they can actually print.
 
 ## License
 
