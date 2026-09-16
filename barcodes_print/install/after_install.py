@@ -11,14 +11,23 @@ from frappe.modules.import_file import import_file_by_path
 # dynamically from Workspace.shortcuts on install instead, which ignores
 # these files entirely. Import them explicitly so the sidebar/app-icon this
 # app ships are always in place, on install and on every migrate.
+#
+# Both doctypes are Frappe v16-only - v15 has no "Workspace Sidebar"/"Desktop
+# Icon" DocType at all, so importing these files there doesn't just fail
+# gracefully, it crashes with an ImportError trying to load a Python module
+# that was never shipped, taking down the whole install-app/migrate. Each
+# entry is paired with its DocType name so it can be skipped on a site where
+# that DocType doesn't exist, rather than assumed to always be there.
 STANDARD_FILES = [
-	("workspace_sidebar", "barcodes_print.json"),
-	("desktop_icon", "barcodes_print.json"),
+	("workspace_sidebar", "barcodes_print.json", "Workspace Sidebar"),
+	("desktop_icon", "barcodes_print.json", "Desktop Icon"),
 ]
 
 
 def sync_standard_files():
-	for folder, filename in STANDARD_FILES:
+	for folder, filename, doctype in STANDARD_FILES:
+		if not frappe.db.exists("DocType", doctype):
+			continue
 		path = frappe.get_app_path("barcodes_print", folder, filename)
 		if os.path.exists(path):
 			import_file_by_path(path, force=True)

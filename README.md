@@ -77,7 +77,7 @@ From then on, clicking Print on the Print Barcode page sends straight to that pr
 
 ## Compatibility
 
-Built and tested against **Frappe v16.26 / ERPNext v16.26**. The app's own code has no version-specific ERPNext customizations, so it should install cleanly on v15 too, but that hasn't been separately verified.
+Built and tested against **Frappe v16.26 / ERPNext v16.26**. Installs cleanly on **Frappe v15** too - the Desk sidebar entry and app icon are skipped there (Workspace Sidebar/Desktop Icon are Frappe v16-only doctypes), but every doctype, page, and printing feature works the same on both versions.
 
 ## Install
 
