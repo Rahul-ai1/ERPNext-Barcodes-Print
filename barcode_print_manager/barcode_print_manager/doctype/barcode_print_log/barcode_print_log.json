@@ -1,0 +1,220 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-09-15 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "item",
+  "item_name",
+  "barcode",
+  "barcode_type",
+  "uom",
+  "column_break_main",
+  "no_of_barcodes",
+  "printed_count",
+  "failed_count",
+  "status",
+  "label_size",
+  "failure_reason",
+  "source_section",
+  "source_doctype",
+  "source_name",
+  "source_row_name",
+  "column_break_source",
+  "printed_by",
+  "printed_on"
+ ],
+ "fields": [
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Item Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "barcode",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Barcode",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "barcode_type",
+   "fieldtype": "Data",
+   "label": "Barcode Type",
+   "read_only": 1
+  },
+  {
+   "fieldname": "uom",
+   "fieldtype": "Link",
+   "label": "UOM",
+   "options": "UOM",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "description": "Total labels requested for this item in this print action.",
+   "fieldname": "no_of_barcodes",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "No. of Barcodes Requested",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "printed_count",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Printed",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "failed_count",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Failed",
+   "read_only": 1
+  },
+  {
+   "default": "Success",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Success\nFailed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "label_size",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Label Size",
+   "options": "Small\nMedium\nLarge",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.status == 'Failed'",
+   "description": "QZ Tray/Zebra Browser Print sends every label in one combined job per print action, so failure is only knowable per batch, not per individual label - a failure here means none of the requested labels for this row were confirmed printed.",
+   "fieldname": "failure_reason",
+   "fieldtype": "Small Text",
+   "label": "Failure Reason",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_section",
+   "fieldtype": "Section Break",
+   "label": "Source Document"
+  },
+  {
+   "fieldname": "source_doctype",
+   "fieldtype": "Link",
+   "label": "Source Doctype",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_name",
+   "fieldtype": "Dynamic Link",
+   "label": "Source Document",
+   "options": "source_doctype",
+   "read_only": 1
+  },
+  {
+   "description": "The source document's line-item row name, used to increment that line's printed-barcode counter. Not shown in the list view.",
+   "fieldname": "source_row_name",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Source Row Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_source",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "printed_by",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Printed By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "default": "Now",
+   "fieldname": "printed_on",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Printed On",
+   "read_only": 1
+  }
+ ],
+ "in_create": 1,
+ "is_submittable": 0,
+ "links": [],
+ "modified": "2026-09-16 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Barcode Print Manager",
+ "name": "Barcode Print Log",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 0,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock Manager",
+   "share": 0,
+   "write": 0
+  },
+  {
+   "create": 0,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock User",
+   "share": 0,
+   "write": 0
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

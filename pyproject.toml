@@ -1,0 +1,17 @@
+[project]
+name = "barcode_print_manager"
+authors = [{ name = "Yash", email = "yash@example.com" }]
+description = "Generate and print barcode labels for thermal barcode printers"
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = [
+    "python-barcode>=0.15.1",
+]
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.bench.frappe-dependencies]
+frappe = ">=15.0.0,<17.0.0-dev"
