@@ -99,6 +99,13 @@ bench restart
 
 Requires a working Frappe bench with **ERPNext already installed** on the target site. The `migrate` step creates every doctype and seeds Barcode Print Settings with sensible defaults (QZ Tray, 203 DPI, standard Small/Medium/Large dimensions, all display toggles on except Rate) — nothing further to configure before using it, though every default is adjustable afterward in **Barcode Print Settings**. Each end user's own PC additionally needs the one-time QZ Tray setup above before they can actually print.
 
+**If `bench get-app` fails with `Directory not empty: '.../apps/ERPNext-Barcodes-Print' -> '.../apps/barcodes_print'`:** a leftover `apps/barcodes_print` folder from an earlier attempt is blocking the rename `bench get-app` does after cloning (it clones into a folder named after the repo, then renames it to the app's actual package name). Remove both stale folders and try again:
+
+```bash
+rm -rf apps/barcodes_print apps/ERPNext-Barcodes-Print
+bench get-app https://github.com/Rahul-ai1/ERPNext-Barcodes-Print.git
+```
+
 ## License
 
 MIT
