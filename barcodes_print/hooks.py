@@ -1,8 +1,8 @@
 app_name = "barcodes_print"
 app_title = "Barcodes Print"
-app_publisher = "Auriga IT"
+app_publisher = "Rahul Chaudhary"
 app_description = "Generate and print barcode labels for thermal barcode printers"
-app_email = "rahul.chaudhary@aurigait.com"
+app_email = "rc1248117@outlook.com"
 app_license = "MIT"
 required_apps = ["erpnext"]
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2026, Auriga IT and contributors
+# Copyright (c) 2026, Rahul Chaudhary and contributors
 # For license information, please see license.txt
 
 """Custom Number Card backends for the Barcodes Print workspace - each one
