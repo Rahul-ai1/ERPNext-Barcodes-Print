@@ -79,15 +79,6 @@ From then on, clicking Print on the Print Barcode page sends straight to that pr
 
 Built and tested against **Frappe v16.26 / ERPNext v16.26**. The app's own code has no version-specific ERPNext customizations, so it should install cleanly on v15 too, but that hasn't been separately verified.
 
-## Known limitations / roadmap
-
-- **No real printer used in testing** — verified via QZ Tray + a virtual print-to-file queue + Labelary rendering, not physical output. Bar spacing/module width may need a small tune once tested against an actual thermal printer.
-- **Zebra Browser Print is unverified on real hardware** — built against its documented API only; no Linux client exists to test against in this environment.
-- **Barcode width estimation for Center/Right alignment is an approximation.** ZPL has no native "center this barcode" command, so its rendered width is estimated from well-known module-count figures per symbology (accurate for EAN/UPC, a reasonable estimate for Code 39/128) — visually correct in testing, but may be off by a module or two on a specific printer/firmware combination.
-- **No per-label print failure tracking.** QZ Tray/Zebra Browser Print send one combined job per print action; the Barcode Print Log's Success/Failed status is per print action, not per individual label within a multi-label job.
-- **The "Barcodes Printed" counter on Purchase Order/Receipt lines has no undo.** Once incremented after a successful print, correcting it requires a direct data edit — there's no "reverse this print" action.
-- **Stray/duplicate barcode entries on an Item aren't detected proactively** — only surfaced when that Item is selected on the Print Barcode page and its multiple-barcode prompt appears.
-
 ## Install
 
 ```bash
