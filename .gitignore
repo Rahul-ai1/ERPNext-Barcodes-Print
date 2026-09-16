@@ -29,3 +29,5 @@ barcodes_print/public/js/vendor/BrowserPrint-*.min.js
 
 # Local no-hardware test rig output (captured ZPL from the CUPS virtual printer)
 test_prints/
+
+docs/*.docx
