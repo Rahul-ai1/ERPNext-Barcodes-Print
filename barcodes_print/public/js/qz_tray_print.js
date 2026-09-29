@@ -51,15 +51,27 @@ barcodes_print.qz = {
 		if (printer_name) {
 			return printer_name;
 		}
+		// qz.printers.getDefault() doesn't always reject when this computer
+		// has no OS-level default printer - on some machines/QZ versions it
+		// resolves with an empty/blank value instead. Passing that straight
+		// through to qz.print() surfaces QZ Tray's own generic "A printer
+		// must be specified before printing" error instead of a message that
+		// actually tells the user what to do about it - so both the reject
+		// and the empty-resolve case are handled the same way here.
+		let default_printer;
 		try {
-			return await qz.printers.getDefault();
+			default_printer = await qz.printers.getDefault();
 		} catch (err) {
+			default_printer = null;
+		}
+		if (!default_printer) {
 			frappe.throw(
 				__(
-					"No Default Label Printer is set in Barcode Print Settings, and QZ Tray could not find a default printer either. Please set a Default Label Printer in Barcode Print Settings, or set a default printer on this computer."
+					"No Default Label Printer is set in Barcode Print Settings, and this computer has no default printer either. Please set a Default Label Printer in Barcode Print Settings, or set a default printer on this computer."
 				)
 			);
 		}
+		return default_printer;
 	},
 
 	async print(job) {
