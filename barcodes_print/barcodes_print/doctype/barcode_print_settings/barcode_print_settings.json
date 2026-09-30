@@ -161,7 +161,7 @@
   },
   {
    "depends_on": "eval:doc.enable_purchase_document_printing",
-   "description": "Only one at a time - matches whichever document your purchase flow actually submits.",
+   "description": "Only one at a time - matches whichever document your purchase flow actually submits. A subcontracted Purchase Order never shows this button regardless of this setting - print its finished goods from its own Subcontracting Order instead, which always has the button when this is enabled. Service/non-stock item rows never get a button row on any of these documents.",
    "fieldname": "purchase_document_type",
    "fieldtype": "Select",
    "label": "Purchase Document Type",
@@ -192,7 +192,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-09-30 00:00:00.000000",
+ "modified": "2026-09-30 01:00:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",

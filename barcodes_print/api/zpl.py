@@ -369,14 +369,25 @@ def _parse_serial_nos(serial_nos) -> list:
 	return [str(s).strip() for s in serial_nos if str(s).strip()]
 
 
-# Maps a Purchase Document Type (Barcode Print Settings) to its items child
-# doctype - both get the "Barcodes Printed" counter field (see
-# install.after_install.ensure_purchase_barcode_tracking_fields), so
-# switching this setting later doesn't require adding fields again.
+# Maps a Purchase Document Type (Barcode Print Settings, plus Subcontracting
+# Order which is always available - see is_purchase_print_enabled_for) to
+# its items child doctype - all three get the "Barcodes Printed" counter
+# field (see install.after_install.ensure_purchase_barcode_tracking_fields),
+# so switching the setting later doesn't require adding fields again.
+# Subcontracting Order's own "items" field is specifically its finished-goods
+# table - its "service_items"/"supplied_items" child tables are deliberately
+# never touched here.
 PURCHASE_ITEM_DOCTYPES = {
 	"Purchase Order": "Purchase Order Item",
 	"Purchase Receipt": "Purchase Receipt Item",
+	"Subcontracting Order": "Subcontracting Order Item",
 }
+
+
+def _is_stock_item(item_code: str) -> bool:
+	"""Service/non-stock items never get a physical barcode label - they
+	have no unit to attach one to."""
+	return bool(frappe.get_cached_value("Item", item_code, "is_stock_item"))
 
 
 def _get_purchase_line_allowance(source_doctype: str, row_name: str, max_extra: int) -> tuple[int, int]:
@@ -399,29 +410,39 @@ def _get_purchase_line_allowance(source_doctype: str, row_name: str, max_extra: 
 @frappe.whitelist()
 def is_purchase_print_enabled_for(doctype: str) -> bool:
 	"""Lightweight, permission-light check used by the Print Barcode button
-	on Purchase Order/Purchase Receipt forms (public/js/purchase_barcode_button.js).
-	Uses a raw single-value DB read rather than get_barcode_print_settings()
-	deliberately: Barcode Print Settings itself is read-restricted to
-	System Manager, but anyone who can already view the Purchase
-	Order/Purchase Receipt should be able to see whether this button
-	applies, without needing separate access to Settings."""
+	on Purchase Order/Purchase Receipt/Subcontracting Order forms
+	(public/js/purchase_barcode_button.js). Uses a raw single-value DB read
+	rather than get_barcode_print_settings() deliberately: Barcode Print
+	Settings itself is read-restricted to System Manager, but anyone who can
+	already view the source document should be able to see whether this
+	button applies, without needing separate access to Settings."""
 	enabled = frappe.db.get_single_value("Barcode Print Settings", "enable_purchase_document_printing")
+	if not enabled:
+		return False
+	if doctype == "Subcontracting Order":
+		# Not an alternative alongside Purchase Order/Purchase Receipt - this
+		# is where a *subcontracted* Purchase Order's own button redirects
+		# to, so it's available whenever purchase-document printing is on
+		# at all, regardless of which of the other two is configured.
+		return True
 	configured_doctype = frappe.db.get_single_value("Barcode Print Settings", "purchase_document_type")
-	return bool(enabled) and configured_doctype == doctype
+	return configured_doctype == doctype
 
 
 @frappe.whitelist()
 def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 	"""Pre-fill data for the Print Barcode page when opened via the Print
-	Barcode button on a submitted Purchase Order/Purchase Receipt. Each
-	row's starting 'No. of Barcodes' defaults to whatever is still allowed
-	(qty + Max Extra Barcodes per Line, minus what's already been printed),
-	not always 1 - matching how GRN-triggered label printing works
-	elsewhere (quantities default from what's actually on the document)."""
+	Barcode button on a submitted Purchase Order/Purchase Receipt/
+	Subcontracting Order. Each row's starting 'No. of Barcodes' defaults to
+	whatever is still allowed (qty + Max Extra Barcodes per Line, minus
+	what's already been printed), not always 1 - matching how GRN-triggered
+	label printing works elsewhere (quantities default from what's actually
+	on the document). Service/non-stock item rows are skipped outright -
+	they have no physical unit to label."""
 	settings = get_barcode_print_settings()
 	if not settings["enable_purchase_document_printing"]:
 		frappe.throw(_("Printing from a Purchase Document is not enabled in Barcode Print Settings."))
-	if settings["purchase_document_type"] != source_doctype:
+	if source_doctype != "Subcontracting Order" and settings["purchase_document_type"] != source_doctype:
 		frappe.throw(
 			_("Barcode Print Settings is currently configured for {0}, not {1}.").format(
 				settings["purchase_document_type"] or _("no document"), source_doctype
@@ -433,8 +454,22 @@ def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 	if doc.docstatus != 1:
 		frappe.throw(_("{0} must be submitted before printing barcodes.").format(source_doctype))
 
+	if source_doctype == "Purchase Order" and doc.get("is_subcontracted"):
+		frappe.throw(
+			_(
+				"{0} is subcontracted - its own items are what's being purchased from the "
+				"subcontractor, not what's being received. Print barcodes from its Subcontracting "
+				"Order instead."
+			).format(source_name)
+		)
+
+	# Subcontracting Order's own "items" field is already just the finished
+	# goods table - "service_items"/"supplied_items" are separate fields on
+	# that doctype and are never read here.
 	rows = []
 	for row in doc.items:
+		if not _is_stock_item(row.item_code):
+			continue
 		already_printed = frappe.utils.cint(row.get("custom_barcodes_printed"))
 		max_allowed = frappe.utils.cint(row.qty) + settings["max_extra_barcodes_per_line"]
 		remaining = max(0, max_allowed - already_printed)

@@ -10,6 +10,14 @@ barcodes_print.add_purchase_print_barcode_button = function (frm, doctype) {
 	if (frm.doc.docstatus !== 1) {
 		return;
 	}
+	// A subcontracted Purchase Order's own items are what you're buying
+	// from the subcontractor, not what you're printing labels for here -
+	// the actual finished-goods receipt happens on its Subcontracting
+	// Order instead, which gets this same button in its own right (see
+	// public/js/subcontracting_order.js).
+	if (doctype === "Purchase Order" && frm.doc.is_subcontracted) {
+		return;
+	}
 
 	frappe.call({
 		method: "barcodes_print.api.zpl.is_purchase_print_enabled_for",

@@ -13,6 +13,7 @@ from barcodes_print.api.zpl import (
 	get_label_dimensions_dots,
 	get_purchase_document_items,
 	get_quick_print_job,
+	is_purchase_print_enabled_for,
 	log_print,
 	mm_to_dots,
 	resolve_row,
@@ -589,6 +590,116 @@ class TestBarcodePrintManager(FrappeTestCase):
 			settings_doc.enable_purchase_document_printing = 0
 			settings_doc.purchase_document_type = ""
 			settings_doc.max_extra_barcodes_per_line = 0
+			settings_doc.save(ignore_permissions=True)
+
+	def _create_service_item(self):
+		item_code = f"TEST-ITEM-SERVICE-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "Test Service Item",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"is_stock_item": 0,
+			"stock_uom": "Nos",
+		}).insert(ignore_permissions=True)
+		return item_code
+
+	def _create_purchase_order(self, item_rows):
+		supplier = frappe.get_all("Supplier", limit=1)[0].name
+		company = frappe.get_all("Company", limit=1)[0].name
+		warehouse_row = frappe.get_all("Warehouse", filters={"company": company}, limit=1)
+		warehouse = (warehouse_row or frappe.get_all("Warehouse", limit=1))[0].name
+
+		for row in item_rows:
+			row.setdefault("schedule_date", frappe.utils.nowdate())
+			if frappe.get_cached_value("Item", row["item_code"], "is_stock_item"):
+				row.setdefault("warehouse", warehouse)
+
+		po = frappe.get_doc({
+			"doctype": "Purchase Order",
+			"supplier": supplier,
+			"company": company,
+			"schedule_date": frappe.utils.nowdate(),
+			"set_warehouse": warehouse,
+			"tax_category": frappe.db.get_value("Tax Category", {}, "name"),
+			"payment_terms_template": frappe.db.get_value("Payment Terms Template", {}, "name"),
+			"tc_name": frappe.db.get_value("Terms and Conditions", {}, "name"),
+			"items": item_rows,
+		}).insert(ignore_permissions=True)
+		po.submit()
+		return po
+
+	def test_get_purchase_document_items_excludes_service_items(self):
+		"""Service/non-stock item rows never get a physical barcode label -
+		only the stock item row should come back from the pre-fill."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.enable_purchase_document_printing = 1
+		settings_doc.purchase_document_type = "Purchase Order"
+		settings_doc.save(ignore_permissions=True)
+
+		stock_item = self._create_test_item_with_barcode()
+		service_item = self._create_service_item()
+		po = self._create_purchase_order([
+			{"item_code": stock_item, "qty": 3, "rate": 10},
+			{"item_code": service_item, "qty": 1, "rate": 500},
+		])
+
+		try:
+			prefill = get_purchase_document_items("Purchase Order", po.name)
+			self.assertEqual(len(prefill["items"]), 1)
+			self.assertEqual(prefill["items"][0]["item"], stock_item)
+		finally:
+			po.cancel()
+			frappe.delete_doc("Purchase Order", po.name, force=True, ignore_permissions=True)
+			settings_doc.enable_purchase_document_printing = 0
+			settings_doc.purchase_document_type = ""
+			settings_doc.save(ignore_permissions=True)
+
+	def test_get_purchase_document_items_blocks_subcontracted_purchase_order(self):
+		"""A subcontracted Purchase Order's own items are what's being
+		bought from the subcontractor, not what's being received - the
+		button should never work here, only on its Subcontracting Order."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.enable_purchase_document_printing = 1
+		settings_doc.purchase_document_type = "Purchase Order"
+		settings_doc.save(ignore_permissions=True)
+
+		item_code = self._create_test_item_with_barcode()
+		po = self._create_purchase_order([{"item_code": item_code, "qty": 2, "rate": 10}])
+		# Bypasses ERPNext's own subcontracting document validation (BOM,
+		# service items, etc.) - only the specific flag this code path
+		# actually checks needs to be true for this test.
+		frappe.db.set_value("Purchase Order", po.name, "is_subcontracted", 1)
+
+		try:
+			with self.assertRaises(frappe.ValidationError):
+				get_purchase_document_items("Purchase Order", po.name)
+		finally:
+			frappe.db.set_value("Purchase Order", po.name, "is_subcontracted", 0)
+			po.reload()
+			po.cancel()
+			frappe.delete_doc("Purchase Order", po.name, force=True, ignore_permissions=True)
+			settings_doc.enable_purchase_document_printing = 0
+			settings_doc.purchase_document_type = ""
+			settings_doc.save(ignore_permissions=True)
+
+	def test_is_purchase_print_enabled_for_subcontracting_order_is_unconditional(self):
+		"""Subcontracting Order isn't an alternative choice alongside
+		Purchase Order/Purchase Receipt in the settings - it's always on
+		once purchase-document printing is enabled at all."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.enable_purchase_document_printing = 1
+		settings_doc.purchase_document_type = "Purchase Receipt"
+		settings_doc.save(ignore_permissions=True)
+
+		try:
+			self.assertTrue(is_purchase_print_enabled_for("Subcontracting Order"))
+			self.assertFalse(is_purchase_print_enabled_for("Purchase Order"))
+			self.assertTrue(is_purchase_print_enabled_for("Purchase Receipt"))
+		finally:
+			settings_doc.enable_purchase_document_printing = 0
+			settings_doc.purchase_document_type = ""
 			settings_doc.save(ignore_permissions=True)
 
 	def test_mm_to_dots_conversion(self):

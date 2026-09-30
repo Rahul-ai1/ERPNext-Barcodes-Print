@@ -149,14 +149,18 @@ def ensure_item_barcode_types():
 
 
 def ensure_purchase_barcode_tracking_fields():
-	"""Add a 'Barcodes Printed' counter to both Purchase Order Item and
-	Purchase Receipt Item, regardless of which one Barcode Print Settings
-	currently points to - so switching that setting later doesn't need a
-	fresh field creation. Read-only, purely maintained by this app's own
-	print flow (see api.zpl.log_print)."""
+	"""Add a 'Barcodes Printed' counter to Purchase Order Item, Purchase
+	Receipt Item, and Subcontracting Order Item, regardless of which one
+	Barcode Print Settings currently points to - so switching that setting
+	later doesn't need a fresh field creation. Read-only, purely maintained
+	by this app's own print flow (see api.zpl.log_print)."""
 	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
 
-	for doctype, insert_after in (("Purchase Order Item", "qty"), ("Purchase Receipt Item", "qty")):
+	for doctype, insert_after in (
+		("Purchase Order Item", "qty"),
+		("Purchase Receipt Item", "qty"),
+		("Subcontracting Order Item", "qty"),
+	):
 		if not frappe.db.exists("DocType", doctype):
 			continue
 		if frappe.db.exists("Custom Field", {"dt": doctype, "fieldname": "custom_barcodes_printed"}):

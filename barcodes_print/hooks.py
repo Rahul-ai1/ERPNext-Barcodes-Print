@@ -32,13 +32,17 @@ app_include_js = [
 # (before zebra_browser_print.js) only once the real file is in place.
 
 doctype_js = {
-	# Purchase Order/Purchase Receipt are core ERPNext doctypes this app
-	# doesn't own - a real committed file via doctype_js, never a Client
-	# Script. Both files run on every submitted document of that type
-	# regardless of settings; the "Print Barcode" button itself only
-	# appears when Barcode Print Settings enables it for that doctype
-	# (see public/js/purchase_barcode_button.js).
+	# Purchase Order/Purchase Receipt/Subcontracting Order are core ERPNext
+	# doctypes this app doesn't own - a real committed file via doctype_js,
+	# never a Client Script. All three files run on every submitted
+	# document of that type regardless of settings; the "Print Barcode"
+	# button itself only appears when Barcode Print Settings enables it for
+	# that doctype (see public/js/purchase_barcode_button.js). Subcontracting
+	# Order support is unconditional whenever the master switch is on - it's
+	# the subcontracted-Purchase-Order exception, not an alternative choice
+	# alongside Purchase Order/Purchase Receipt.
 	"Purchase Order": "public/js/purchase_order.js",
 	"Purchase Receipt": "public/js/purchase_receipt.js",
+	"Subcontracting Order": "public/js/subcontracting_order.js",
 }
 
