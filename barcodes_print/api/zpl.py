@@ -433,12 +433,13 @@ def is_purchase_print_enabled_for(doctype: str) -> bool:
 def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 	"""Pre-fill data for the Print Barcode page when opened via the Print
 	Barcode button on a submitted Purchase Order/Purchase Receipt/
-	Subcontracting Order. Each row's starting 'No. of Barcodes' defaults to
-	whatever is still allowed (qty + Max Extra Barcodes per Line, minus
-	what's already been printed), not always 1 - matching how GRN-triggered
-	label printing works elsewhere (quantities default from what's actually
-	on the document). Service/non-stock item rows are skipped outright -
-	they have no physical unit to label."""
+	Subcontracting Order. Each row's starting 'No. of Barcodes' always
+	defaults to that line's own quantity, never quantity + extra - the
+	Max Extra Barcodes per Line allowance (or no limit at all, in
+	unlimited_reprints mode) only ever matters if the user deliberately
+	raises the number themselves, e.g. for a torn/damaged label reprint.
+	Service/non-stock item rows are skipped outright - they have no
+	physical unit to label."""
 	settings = get_barcode_print_settings()
 	if not settings["enable_purchase_document_printing"]:
 		frappe.throw(_("Printing from a Purchase Document is not enabled in Barcode Print Settings."))
@@ -470,14 +471,26 @@ def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 	for row in doc.items:
 		if not _is_stock_item(row.item_code):
 			continue
-		already_printed = frappe.utils.cint(row.get("custom_barcodes_printed"))
-		max_allowed = frappe.utils.cint(row.qty) + settings["max_extra_barcodes_per_line"]
-		remaining = max(0, max_allowed - already_printed)
+		qty = frappe.utils.cint(row.qty)
+		# Always defaults to the line's own quantity - never quantity + extra.
+		# The extra allowance (or no limit at all, in unlimited_reprints
+		# mode) only ever matters if the user deliberately raises this
+		# number themselves, e.g. to reprint a torn/damaged label.
+		no_of_barcodes = qty
+		max_allowed = 0
+		if not settings["unlimited_reprints"]:
+			already_printed = frappe.utils.cint(row.get("custom_barcodes_printed"))
+			max_allowed = qty + settings["max_extra_barcodes_per_line"]
+			remaining = max(0, max_allowed - already_printed)
+			# Never suggest more than the line quantity by default, but don't
+			# suggest more than what's actually still allowed either.
+			no_of_barcodes = min(qty, remaining)
+
 		rows.append({
 			"item": row.item_code,
-			"no_of_barcodes": remaining,
+			"no_of_barcodes": no_of_barcodes,
 			"source_row_name": row.name,
-			"max_allowed": remaining,
+			"max_allowed": max_allowed,
 		})
 
 	return {"source_doctype": source_doctype, "source_name": source_name, "items": rows}
@@ -525,7 +538,7 @@ def get_quick_print_job(items, size: str, source_doctype: str = "", source_name:
 		# single barcode value no_of_barcodes times.
 		row_label_count = len(serial_nos) if serial_nos else frappe.utils.cint(item_row.get("no_of_barcodes", 1)) or 1
 
-		if source_doctype and source_row_name:
+		if source_doctype and source_row_name and not settings["unlimited_reprints"]:
 			already_printed, max_allowed = _get_purchase_line_allowance(
 				source_doctype, source_row_name, settings["max_extra_barcodes_per_line"]
 			)
@@ -534,7 +547,8 @@ def get_quick_print_job(items, size: str, source_doctype: str = "", source_name:
 				frappe.throw(
 					_(
 						"Row #{0}: only {1} more label(s) may be printed for this line "
-						"(limit is quantity + {2} extra, {3} already printed)."
+						"(limit is quantity + {2} extra, {3} already printed). Enable \"No Printing "
+						"Limit\" in Barcode Print Settings to remove this cap."
 					).format(idx, max(0, remaining), settings["max_extra_barcodes_per_line"], already_printed)
 				)
 

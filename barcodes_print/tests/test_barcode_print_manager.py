@@ -522,10 +522,10 @@ class TestBarcodePrintManager(FrappeTestCase):
 				self.assertLess(int(match.group(1)), width_dots, "A field's x-origin fell outside the label width")
 
 	def test_purchase_order_integration_enforces_max_extra_and_tracks_count(self):
-		"""Full Purchase Order integration: pre-fill defaults to the
-		remaining allowance (qty + Max Extra Barcodes per Line, minus
-		what's already printed), a successful print bumps the line's
-		counter, and printing beyond the limit is blocked."""
+		"""Full Purchase Order integration: pre-fill always defaults to the
+		line's own quantity (never quantity + extra), a successful print
+		bumps the line's counter, and only a deliberately-raised request
+		beyond quantity + Max Extra Barcodes per Line is blocked."""
 		settings_doc = frappe.get_single("Barcode Print Settings")
 		settings_doc.enable_purchase_document_printing = 1
 		settings_doc.purchase_document_type = "Purchase Order"
@@ -555,12 +555,15 @@ class TestBarcodePrintManager(FrappeTestCase):
 		po.submit()
 
 		try:
-			# qty(5) + max_extra(2) = 7 allowed, none printed yet.
+			# Defaults to the line's own quantity (5), not qty + max_extra (7).
 			prefill = get_purchase_document_items("Purchase Order", po.name)
 			self.assertEqual(len(prefill["items"]), 1)
-			self.assertEqual(prefill["items"][0]["no_of_barcodes"], 7)
+			self.assertEqual(prefill["items"][0]["no_of_barcodes"], 5)
+			self.assertEqual(prefill["items"][0]["max_allowed"], 7)  # ceiling, not the default
 			row_name = prefill["items"][0]["source_row_name"]
 
+			# User deliberately raises it to the full ceiling (a torn-label
+			# style reprint need) - still allowed since it's within qty + extra.
 			job = get_quick_print_job(
 				[{"item": item_code, "no_of_barcodes": 7, "source_row_name": row_name}],
 				"Medium",
@@ -590,6 +593,55 @@ class TestBarcodePrintManager(FrappeTestCase):
 			settings_doc.enable_purchase_document_printing = 0
 			settings_doc.purchase_document_type = ""
 			settings_doc.max_extra_barcodes_per_line = 0
+			settings_doc.save(ignore_permissions=True)
+
+	def test_unlimited_reprints_removes_the_cap_but_default_stays_at_quantity(self):
+		"""With No Printing Limit on, the same line can be printed past
+		quantity + Max Extra any number of times - but the pre-filled
+		default is still just the line's own quantity, never inflated."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.enable_purchase_document_printing = 1
+		settings_doc.purchase_document_type = "Purchase Order"
+		settings_doc.max_extra_barcodes_per_line = 0
+		settings_doc.unlimited_reprints = 1
+		settings_doc.save(ignore_permissions=True)
+
+		item_code = self._create_test_item_with_barcode()
+		po = self._create_purchase_order([{"item_code": item_code, "qty": 4, "rate": 10}])
+
+		try:
+			prefill = get_purchase_document_items("Purchase Order", po.name)
+			self.assertEqual(prefill["items"][0]["no_of_barcodes"], 4)
+			self.assertEqual(prefill["items"][0]["max_allowed"], 0)  # no cap to warn about
+			row_name = prefill["items"][0]["source_row_name"]
+
+			# Print well past qty(4) + no extra allowance - must not be blocked.
+			job = get_quick_print_job(
+				[{"item": item_code, "no_of_barcodes": 50, "source_row_name": row_name}],
+				"Medium",
+				source_doctype="Purchase Order",
+				source_name=po.name,
+			)
+			self.assertEqual(job["total_labels"], 50)
+			log_print(
+				job["resolved_items"], "Medium", status="Success",
+				source_doctype="Purchase Order", source_name=po.name,
+			)
+
+			# Reprinting the exact same document again afterwards is still
+			# never blocked - the whole point of this setting.
+			get_quick_print_job(
+				[{"item": item_code, "no_of_barcodes": 4, "source_row_name": row_name}],
+				"Medium",
+				source_doctype="Purchase Order",
+				source_name=po.name,
+			)
+		finally:
+			po.cancel()
+			frappe.delete_doc("Purchase Order", po.name, force=True, ignore_permissions=True)
+			settings_doc.enable_purchase_document_printing = 0
+			settings_doc.purchase_document_type = ""
+			settings_doc.unlimited_reprints = 0
 			settings_doc.save(ignore_permissions=True)
 
 	def _create_service_item(self):

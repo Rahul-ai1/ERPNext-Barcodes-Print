@@ -27,6 +27,7 @@
   "purchase_document_type",
   "column_break_purchase",
   "max_extra_barcodes_per_line",
+  "unlimited_reprints",
   "qz_certificate"
  ],
  "fields": [
@@ -174,12 +175,20 @@
   },
   {
    "default": "0",
-   "depends_on": "eval:doc.enable_purchase_document_printing",
-   "description": "How many MORE labels than a line's quantity may be printed in total (e.g. for spares/damaged replacements). 0 = exactly the line quantity, no extras.",
+   "depends_on": "eval:doc.enable_purchase_document_printing && !doc.unlimited_reprints",
+   "description": "The most a line's own \"No. of Barcodes\" may ever be raised to beyond its quantity (e.g. for a torn/damaged label reprint) - never suggested by default, only ever a ceiling on what the user can manually type in. 0 = the line quantity is the hard ceiling, no extras allowed at all.",
    "fieldname": "max_extra_barcodes_per_line",
    "fieldtype": "Int",
    "label": "Max Extra Barcodes per Line",
    "non_negative": 1
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.enable_purchase_document_printing",
+   "description": "Removes the quantity + extra ceiling entirely, so the same Purchase Order/Receipt/Subcontracting Order can be reprinted from as many times as needed with no block. Each line still only ever defaults to its own quantity per print, never more - this only removes the limit on repeating that.",
+   "fieldname": "unlimited_reprints",
+   "fieldtype": "Check",
+   "label": "No Printing Limit (Unlimited Reprints)"
   },
   {
    "description": "Auto-generated public certificate used to sign QZ Tray connections, so users approve printing from this site once, permanently, instead of on every print. The matching private key is stored encrypted and never shown here.",
@@ -192,7 +201,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-09-30 01:00:00.000000",
+ "modified": "2026-09-30 02:00:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",

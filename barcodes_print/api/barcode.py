@@ -137,6 +137,7 @@ def get_barcode_print_settings() -> dict:
 		"enable_purchase_document_printing": cint(settings.get("enable_purchase_document_printing")),
 		"purchase_document_type": settings.get("purchase_document_type") or "",
 		"max_extra_barcodes_per_line": cint(settings.get("max_extra_barcodes_per_line") or 0),
+		"unlimited_reprints": cint(settings.get("unlimited_reprints")),
 		"default_price_list": settings.get("default_price_list") or "",
 	}
 
