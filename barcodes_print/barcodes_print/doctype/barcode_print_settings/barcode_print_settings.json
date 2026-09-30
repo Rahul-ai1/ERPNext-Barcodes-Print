@@ -26,7 +26,8 @@
   "enable_purchase_document_printing",
   "purchase_document_type",
   "column_break_purchase",
-  "max_extra_barcodes_per_line"
+  "max_extra_barcodes_per_line",
+  "qz_certificate"
  ],
  "fields": [
   {
@@ -179,11 +180,19 @@
    "fieldtype": "Int",
    "label": "Max Extra Barcodes per Line",
    "non_negative": 1
+  },
+  {
+   "description": "Auto-generated public certificate used to sign QZ Tray connections, so users approve printing from this site once, permanently, instead of on every print. The matching private key is stored encrypted and never shown here.",
+   "fieldname": "qz_certificate",
+   "fieldtype": "Long Text",
+   "hidden": 1,
+   "label": "QZ Tray Certificate",
+   "read_only": 1
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-09-17 01:00:00.000000",
+ "modified": "2026-09-30 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",

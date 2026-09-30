@@ -20,11 +20,28 @@ barcodes_print.qz = {
 		if (this._configured) {
 			return;
 		}
-		// Unsigned connections: QZ Tray shows its own "Action Required"
-		// allow/deny popup the first time this site connects (or every
-		// time, unless the user checks "Remember this decision").
-		qz.security.setCertificatePromise((resolve) => resolve());
-		qz.security.setSignaturePromise(() => (resolve) => resolve());
+		// Signed connection: the certificate identifies this site to QZ Tray
+		// consistently (generated once server-side, never changes), and every
+		// request is signed with the matching private key, which never leaves
+		// the server - see api/qz_sign.py. Without this, QZ Tray treats the
+		// connection as anonymous and shows its "Action Required - Untrusted
+		// website" popup on every single print, for every user, since
+		// "Remember this decision" can't stick to an identity that isn't
+		// actually verifiable. With it, a user approves once, ever.
+		qz.security.setCertificatePromise((resolve, reject) => {
+			frappe.call({ method: "barcodes_print.api.qz_sign.get_certificate" })
+				.then((r) => resolve(r.message))
+				.catch(reject);
+		});
+		qz.security.setSignatureAlgorithm("SHA512");
+		qz.security.setSignaturePromise((to_sign) => (resolve, reject) => {
+			frappe.call({
+				method: "barcodes_print.api.qz_sign.sign",
+				args: { request: to_sign },
+			})
+				.then((r) => resolve(r.message))
+				.catch(reject);
+		});
 		this._configured = true;
 	},
 
