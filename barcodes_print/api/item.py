@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import frappe
+from frappe.utils import cint
 
 
 def get_item_price(item_code: str, price_list: str):
@@ -28,6 +29,8 @@ def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str 
 	details = {
 		"item_name": item.item_name or "",
 		"uom": item.stock_uom or "",
+		"has_batch_no": cint(item.has_batch_no),
+		"has_serial_no": cint(item.has_serial_no),
 		# None (not 0.0) means "no price found" - kept distinct from a
 		# genuine zero price so the label can print "N/A" instead of a
 		# misleading "0.00". Only ever resolved from the given Price List's
@@ -88,3 +91,39 @@ def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str 
 
 	# If barcode is not in Item Master, leave blank ("")
 	return details
+
+
+@frappe.whitelist()
+def get_available_batches(item_code: str) -> list:
+	"""Existing Batches for this Item, newest first - lets the Print Barcode
+	page's user pick which specific batch a label run is for, rather than
+	typing a Batch No from memory. Disabled batches are excluded; nothing
+	here creates or reserves stock, this is a read-only lookup for printing."""
+	if not item_code:
+		return []
+	return frappe.get_all(
+		"Batch",
+		filters={"item": item_code, "disabled": 0},
+		fields=["name", "expiry_date"],
+		order_by="creation desc",
+		limit_page_length=100,
+	)
+
+
+@frappe.whitelist()
+def get_available_serial_nos(item_code: str, batch_no: str = "") -> list:
+	"""Existing, still-Active Serial Nos for this Item (optionally narrowed to
+	one Batch), so the user can multi-select exactly which physical units a
+	label run covers instead of typing serial numbers from memory."""
+	if not item_code:
+		return []
+	filters = {"item_code": item_code, "status": "Active"}
+	if batch_no:
+		filters["batch_no"] = batch_no
+	return frappe.get_all(
+		"Serial No",
+		filters=filters,
+		fields=["name", "batch_no"],
+		order_by="creation desc",
+		limit_page_length=500,
+	)

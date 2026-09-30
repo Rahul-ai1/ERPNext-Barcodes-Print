@@ -178,6 +178,10 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		text_lines_after.append(row.barcode)
 	if rules["show_barcode_type"]:
 		text_lines_after.append(row.barcode_type)
+	if rules["show_batch_no"] and row.batch_no:
+		text_lines_after.append(_("Batch: {0}").format(row.batch_no))
+	if rules["show_serial_no"] and row.serial_no:
+		text_lines_after.append(_("Serial: {0}").format(row.serial_no))
 	if rules["show_uom"] and row.uom:
 		text_lines_after.append(f"UOM: {row.uom}")
 	if rules["show_rate"]:
@@ -254,11 +258,23 @@ def resolve_row(
 	idx=1,
 	source_row_name: str = "",
 	price_list: str = "",
+	batch_no: str = "",
+	serial_no: str = "",
 ) -> "frappe._dict":
 	"""Fetch and validate everything needed to print one item row, mirroring
 	business rules 5.1/5.2: auto-fetch Item Name/Barcode/Barcode Type/UOM
 	from the Item master, block on a missing Barcode, and auto-detect the
-	Barcode Type when it's left blank (business rule 5.3)."""
+	Barcode Type when it's left blank (business rule 5.3).
+
+	A Serial No or Batch No, once given, becomes the label's own barcode
+	value in place of the Item's generic Item Barcode - overrides any
+	barcode/barcode_type also passed in. Scanning that value anywhere in
+	ERPNext (erpnext.stock.utils.scan_barcode) resolves straight back to
+	this Item - and, for a serial, its Batch too - with no change to
+	ERPNext core, since Serial No/Batch are already directly scannable
+	there. Code 128 is used regardless of the Item's own registered
+	symbology, since these are free-form Frappe document names, not
+	fixed-format retail codes."""
 	if not item_code:
 		frappe.throw(_("Item is required."))
 
@@ -266,7 +282,28 @@ def resolve_row(
 	if no_of_barcodes < 1:
 		frappe.throw(_("No. of Barcodes must be at least 1."))
 
-	details = get_item_barcode_details(item_code, barcode or "", price_list or "")
+	if serial_no:
+		serial_doc = frappe.db.get_value("Serial No", serial_no, ["item_code", "batch_no"], as_dict=True)
+		if not serial_doc:
+			frappe.throw(_("Row #{0}: Serial No {1} was not found.").format(idx, serial_no))
+		if serial_doc.item_code != item_code:
+			frappe.throw(
+				_("Row #{0}: Serial No {1} belongs to Item {2}, not {3}.").format(
+					idx, serial_no, serial_doc.item_code, item_code
+				)
+			)
+		batch_no = batch_no or serial_doc.batch_no or ""
+		barcode = serial_no
+		barcode_type = "Code 128"
+		no_of_barcodes = 1
+	elif batch_no:
+		if not frappe.db.exists("Batch", {"name": batch_no, "item": item_code}):
+			frappe.throw(_("Row #{0}: Batch No {1} was not found for Item {2}.").format(idx, batch_no, item_code))
+		barcode = batch_no
+		barcode_type = "Code 128"
+
+	encoding_batch_or_serial = bool(serial_no or batch_no)
+	details = get_item_barcode_details(item_code, "" if encoding_batch_or_serial else (barcode or ""), price_list or "")
 	row = frappe._dict(
 		idx=idx,
 		item=item_code,
@@ -280,6 +317,8 @@ def resolve_row(
 		barcode=barcode or details.get("barcode") or "",
 		barcode_type=barcode_type or details.get("barcode_type") or "",
 		barcode_uom=details.get("barcode_uom") or "",
+		batch_no=batch_no or "",
+		serial_no=serial_no or "",
 		no_of_barcodes=no_of_barcodes,
 		source_row_name=source_row_name or "",
 	)
@@ -317,6 +356,17 @@ def _parse_items(items) -> list:
 	if not items:
 		frappe.throw(_("Please add at least one item row."))
 	return items
+
+
+def _parse_serial_nos(serial_nos) -> list:
+	"""Print Label Item's serial_nos field is a newline-separated Small Text
+	(same convention as the row's own multi-select picker); also accepts a
+	plain list, in case a caller already has one."""
+	if not serial_nos:
+		return []
+	if isinstance(serial_nos, str):
+		return [s.strip() for s in serial_nos.splitlines() if s.strip()]
+	return [str(s).strip() for s in serial_nos if str(s).strip()]
 
 
 # Maps a Purchase Document Type (Barcode Print Settings) to its items child
@@ -433,33 +483,43 @@ def get_quick_print_job(items, size: str, source_doctype: str = "", source_name:
 		# A row can override the Price List used for its own rate; falls
 		# back to whatever's configured in Barcode Print Settings.
 		price_list = item_row.get("price_list") or settings["default_price_list"]
-		row = resolve_row(
-			item_row.get("item"),
-			item_row.get("barcode", ""),
-			item_row.get("barcode_type", ""),
-			item_row.get("no_of_barcodes", 1),
-			idx,
-			source_row_name,
-			price_list,
-		)
+		batch_no = item_row.get("batch_no") or ""
+		serial_nos = _parse_serial_nos(item_row.get("serial_nos"))
+		# One serial = one physical unit = exactly one label each, so a
+		# row expands into len(serial_nos) labels instead of repeating a
+		# single barcode value no_of_barcodes times.
+		row_label_count = len(serial_nos) if serial_nos else frappe.utils.cint(item_row.get("no_of_barcodes", 1)) or 1
 
 		if source_doctype and source_row_name:
 			already_printed, max_allowed = _get_purchase_line_allowance(
 				source_doctype, source_row_name, settings["max_extra_barcodes_per_line"]
 			)
 			remaining = max_allowed - already_printed
-			if row.no_of_barcodes > remaining:
+			if row_label_count > remaining:
 				frappe.throw(
 					_(
 						"Row #{0}: only {1} more label(s) may be printed for this line "
 						"(limit is quantity + {2} extra, {3} already printed)."
-					).format(row.idx, max(0, remaining), settings["max_extra_barcodes_per_line"], already_printed)
+					).format(idx, max(0, remaining), settings["max_extra_barcodes_per_line"], already_printed)
 				)
 
-		label_zpl = build_label_zpl(row, settings, size)
-		blocks.extend([label_zpl] * row.no_of_barcodes)
-		total_labels += row.no_of_barcodes
-		resolved_items.append(dict(row))
+		for serial_no in serial_nos or [""]:
+			row = resolve_row(
+				item_row.get("item"),
+				item_row.get("barcode", ""),
+				item_row.get("barcode_type", ""),
+				item_row.get("no_of_barcodes", 1),
+				idx,
+				source_row_name,
+				price_list,
+				batch_no,
+				serial_no,
+			)
+
+			label_zpl = build_label_zpl(row, settings, size)
+			blocks.extend([label_zpl] * row.no_of_barcodes)
+			total_labels += row.no_of_barcodes
+			resolved_items.append(dict(row))
 
 	width_mm_field, height_mm_field = LABEL_SIZE_SETTINGS_FIELDS[size]
 
@@ -511,6 +571,8 @@ def log_print(
 			"barcode": item_row.get("barcode"),
 			"barcode_type": item_row.get("barcode_type"),
 			"uom": item_row.get("uom"),
+			"batch_no": item_row.get("batch_no") or "",
+			"serial_no": item_row.get("serial_no") or "",
 			"no_of_barcodes": no_of_barcodes,
 			"printed_count": no_of_barcodes if is_success else 0,
 			"failed_count": 0 if is_success else no_of_barcodes,

@@ -61,6 +61,59 @@ barcodes_print.print_barcode_page.prompt_barcode_choice = function (row, choices
 	);
 };
 
+// Shown automatically right after picking a serial-tracked Item (and again
+// if Batch No changes on one), so the user can pick exactly which physical
+// units this print run covers - one label prints per Serial No selected
+// here, each encoding that exact Serial No so scanning it anywhere in
+// ERPNext later resolves Item + Batch automatically (see api/zpl.py
+// resolve_row). Cancelling just leaves serial_nos as it was; there's no
+// forced choice the way there is for an ambiguous plain barcode.
+barcodes_print.print_barcode_page.prompt_serial_no_choice = function (row, item_code, batch_no) {
+	frappe.call({
+		method: "barcodes_print.api.item.get_available_serial_nos",
+		args: { item_code, batch_no: batch_no || "" },
+	}).then((r) => {
+		const available = r.message || [];
+		if (!available.length) {
+			frappe.show_alert({
+				message: __("No available Serial Nos found for {0}.", [item_code]),
+				indicator: "orange",
+			});
+			return;
+		}
+
+		const already_selected = new Set((row.doc.serial_nos || "").split("\n").filter(Boolean));
+		const dialog = new frappe.ui.Dialog({
+			title: __("Select Serial Nos"),
+			fields: [
+				{
+					fieldname: "serials",
+					fieldtype: "MultiCheck",
+					label: __("Select which units this print run is for"),
+					options: available.map((s) => ({
+						label: s.batch_no ? `${s.name} (${s.batch_no})` : s.name,
+						value: s.name,
+						checked: already_selected.has(s.name),
+					})),
+					columns: 2,
+				},
+			],
+			primary_action_label: __("Use Selected"),
+			primary_action(values) {
+				const selected = values.serials || [];
+				if (!selected.length) {
+					frappe.msgprint(__("Select at least one Serial No, or close this dialog to leave it unchanged."));
+					return;
+				}
+				row.doc.serial_nos = selected.join("\n");
+				row.refresh_field("serial_nos");
+				dialog.hide();
+			},
+		});
+		dialog.show();
+	});
+};
+
 // Re-fetches this row's rate for whatever Item + Price List it currently
 // has - called after either one changes. Leaves rate blank (server-side,
 // that means None -> the label prints "N/A") when there's no Item yet or
@@ -96,12 +149,14 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 				const row = this.grid_row;
 				const item_code = this.value;
 				if (!item_code) {
-					["item_name", "uom", "barcode", "barcode_type"].forEach((f) => {
+					["item_name", "uom", "barcode", "barcode_type", "batch_no", "serial_nos"].forEach((f) => {
 						row.doc[f] = "";
 						row.refresh_field(f);
 					});
 					row.doc.rate = null;
 					row.refresh_field("rate");
+					row.doc._has_batch_no = 0;
+					row.doc._has_serial_no = 0;
 					barcodes_print.print_barcode_page.update_total();
 					return;
 				}
@@ -115,7 +170,15 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 						row.doc.barcode = data.barcode || "";
 						row.doc.barcode_type = data.barcode_type || "";
 						row.doc.rate = data.rate;
-						["item_name", "uom", "barcode", "barcode_type", "rate"].forEach((f) => row.refresh_field(f));
+						// A different Item invalidates any Batch No/Serial
+						// Nos picked for the previous one.
+						row.doc.batch_no = "";
+						row.doc.serial_nos = "";
+						row.doc._has_batch_no = data.has_batch_no;
+						row.doc._has_serial_no = data.has_serial_no;
+						["item_name", "uom", "barcode", "barcode_type", "rate", "batch_no", "serial_nos"].forEach((f) =>
+							row.refresh_field(f)
+						);
 
 						// More than one barcode on this Item: the server
 						// deliberately leaves Barcode blank rather than
@@ -126,6 +189,15 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 						if (choices.length > 1) {
 							barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
 						}
+
+						// Serial-tracked: ask which physical units are being
+						// labelled right away, same as the barcode-choice
+						// prompt above - Batch No is picked separately below
+						// (a Link field of its own) if the item only tracks
+						// batches, not individual serials.
+						if (data.has_serial_no) {
+							barcodes_print.print_barcode_page.prompt_serial_no_choice(row, item_code, "");
+						}
 					},
 				});
 			},
@@ -134,6 +206,29 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 		{ fieldname: "uom", fieldtype: "Link", options: "UOM", in_list_view: 1, label: __("UOM"), read_only: 1 },
 		{ fieldname: "barcode", fieldtype: "Data", in_list_view: 1, label: __("Barcode"), read_only: 1 },
 		{ fieldname: "barcode_type", fieldtype: "Data", in_list_view: 1, label: __("Barcode Type"), read_only: 1 },
+		{
+			fieldname: "batch_no",
+			fieldtype: "Link",
+			options: "Batch",
+			in_list_view: 1,
+			label: __("Batch No"),
+			get_query: function (doc) {
+				return { filters: { item: doc.item, disabled: 0 } };
+			},
+			onchange: function () {
+				const row = this.grid_row;
+				if (row.doc._has_serial_no && row.doc.item) {
+					barcodes_print.print_barcode_page.prompt_serial_no_choice(row, row.doc.item, this.value || "");
+				}
+			},
+		},
+		{
+			fieldname: "serial_nos",
+			fieldtype: "Small Text",
+			in_list_view: 1,
+			label: __("Serial Nos"),
+			read_only: 1,
+		},
 		{
 			fieldname: "no_of_barcodes",
 			fieldtype: "Int",
@@ -274,7 +369,15 @@ barcodes_print.print_barcode_page.update_total = function () {
 	const state = barcodes_print.print_barcode_page._state;
 	if (!state) return;
 	const items = state.items_control.get_value() || [];
-	const total = items.reduce((sum, row) => sum + (cint(row.no_of_barcodes) || 0), 0);
+	// A row with Serial Nos selected prints exactly one label per serial
+	// (see api/zpl.py get_quick_print_job's row expansion), not
+	// no_of_barcodes - matching that here so the running total is accurate
+	// before the user ever clicks Print.
+	const row_count = (row) => {
+		const serials = (row.serial_nos || "").split("\n").filter(Boolean);
+		return serials.length || cint(row.no_of_barcodes) || 0;
+	};
+	const total = items.reduce((sum, row) => sum + row_count(row), 0);
 	state.$total_area.text(
 		items.length ? __("{0} label(s) across {1} item row(s) will be printed.", [total, items.length]) : ""
 	);

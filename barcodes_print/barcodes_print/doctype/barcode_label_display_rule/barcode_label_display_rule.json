@@ -15,7 +15,10 @@
   "show_barcode_type",
   "column_break_display_2",
   "show_uom",
-  "show_rate"
+  "show_rate",
+  "column_break_display_3",
+  "show_batch_no",
+  "show_serial_no"
  ],
  "fields": [
   {
@@ -89,11 +92,31 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Rate / Price"
+  },
+  {
+   "fieldname": "column_break_display_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "description": "Only printed when the row being printed actually has a Batch No (batch-tracked items).",
+   "fieldname": "show_batch_no",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Batch No"
+  },
+  {
+   "default": "1",
+   "description": "Only printed when the row being printed actually has a Serial No (serial-tracked items).",
+   "fieldname": "show_serial_no",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Serial No"
   }
  ],
  "istable": 1,
  "links": [],
- "modified": "2026-09-17 00:00:00.000000",
+ "modified": "2026-09-30 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Label Display Rule",

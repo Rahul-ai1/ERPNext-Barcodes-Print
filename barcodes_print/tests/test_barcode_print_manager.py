@@ -610,3 +610,114 @@ class TestBarcodePrintManager(FrappeTestCase):
 			"barcodes": [{"barcode": barcode_val, "barcode_type": "EAN-13"}]
 		}).insert(ignore_permissions=True)
 		return doc.name
+
+	def _create_batch_tracked_item(self):
+		item_code = f"TEST-ITEM-BATCH-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "Test Batch-Tracked Item",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": "Nos",
+			"has_batch_no": 1,
+			"create_new_batch": 1,
+		}).insert(ignore_permissions=True)
+		batch = frappe.get_doc({
+			"doctype": "Batch",
+			"batch_id": f"TEST-BATCH-{frappe.generate_hash(length=6)}",
+			"item": item_code,
+		}).insert(ignore_permissions=True)
+		return item_code, batch.name
+
+	def _create_serial_tracked_item(self, batch_no=None):
+		item_code = f"TEST-ITEM-SERIAL-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "Test Serial-Tracked Item",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": "Nos",
+			"has_serial_no": 1,
+		}).insert(ignore_permissions=True)
+		serials = []
+		for _ in range(2):
+			serial = frappe.get_doc({
+				"doctype": "Serial No",
+				"serial_no": f"TEST-SN-{frappe.generate_hash(length=8)}",
+				"item_code": item_code,
+				"batch_no": batch_no,
+				"company": "_Test Company" if frappe.db.exists("Company", "_Test Company") else None,
+				"status": "Active",
+			}).insert(ignore_permissions=True)
+			serials.append(serial.name)
+		return item_code, serials
+
+	def test_resolve_row_encodes_batch_no_as_barcode(self):
+		"""Printing for a specific Batch No encodes that Batch No as the
+		label's own barcode (Code 128) instead of the item's generic
+		barcode - scanning it anywhere in ERPNext resolves the Item via
+		erpnext.stock.utils.scan_barcode's own Batch lookup, no core
+		changes needed."""
+		item_code, batch_no = self._create_batch_tracked_item()
+		row = resolve_row(item_code, no_of_barcodes=5, batch_no=batch_no)
+		self.assertEqual(row.barcode, batch_no)
+		self.assertEqual(row.barcode_type, "Code 128")
+		self.assertEqual(row.batch_no, batch_no)
+		self.assertEqual(row.no_of_barcodes, 5)  # batches can print multiple copies
+
+	def test_resolve_row_rejects_batch_no_for_wrong_item(self):
+		_item_code, batch_no = self._create_batch_tracked_item()
+		other_item = self._create_test_item_with_barcode()
+		with self.assertRaises(frappe.ValidationError):
+			resolve_row(other_item, no_of_barcodes=1, batch_no=batch_no)
+
+	def test_resolve_row_encodes_serial_no_and_inherits_its_batch(self):
+		"""One Serial No always means exactly one physical unit - no_of_barcodes
+		is forced to 1 regardless of what was requested, and the serial's own
+		Batch No is carried onto the row even when not separately supplied."""
+		_batch_item, batch_no = self._create_batch_tracked_item()
+		serial_item_code, serials = self._create_serial_tracked_item(batch_no=batch_no)
+		row = resolve_row(serial_item_code, no_of_barcodes=10, serial_no=serials[0])
+		self.assertEqual(row.barcode, serials[0])
+		self.assertEqual(row.barcode_type, "Code 128")
+		self.assertEqual(row.serial_no, serials[0])
+		self.assertEqual(row.batch_no, batch_no)  # inherited from the serial itself
+		self.assertEqual(row.no_of_barcodes, 1)
+
+	def test_resolve_row_rejects_serial_no_for_wrong_item(self):
+		_item_code, serials = self._create_serial_tracked_item()
+		other_item = self._create_test_item_with_barcode()
+		with self.assertRaises(frappe.ValidationError):
+			resolve_row(other_item, no_of_barcodes=1, serial_no=serials[0])
+
+	def test_build_label_zpl_prints_batch_and_serial_lines(self):
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		self._set_display_rule(settings_doc, "Medium", show_batch_no=1, show_serial_no=1)
+		settings = get_barcode_print_settings()
+
+		item_code, batch_no = self._create_batch_tracked_item()
+		row = resolve_row(item_code, no_of_barcodes=1, batch_no=batch_no)
+		zpl = build_label_zpl(row, settings, "Medium")
+		self.assertIn(f"Batch: {batch_no}", zpl)
+
+		serial_item_code, serials = self._create_serial_tracked_item(batch_no=batch_no)
+		row2 = resolve_row(serial_item_code, no_of_barcodes=1, serial_no=serials[0])
+		zpl2 = build_label_zpl(row2, settings, "Medium")
+		self.assertIn(f"Serial: {serials[0]}", zpl2)
+		self.assertIn(f"Batch: {batch_no}", zpl2)
+
+	def test_get_quick_print_job_expands_one_row_per_serial_no(self):
+		"""Selecting multiple Serial Nos for one grid row must produce one
+		distinct label per serial - never repeats of the same barcode."""
+		item_code, serials = self._create_serial_tracked_item()
+		items = [{
+			"item": item_code,
+			"no_of_barcodes": 1,
+			"serial_nos": "\n".join(serials),
+		}]
+		job = get_quick_print_job(items=items, size="Medium")
+		self.assertEqual(job["total_labels"], len(serials))
+		self.assertEqual(len(job["resolved_items"]), len(serials))
+		self.assertEqual({r["barcode"] for r in job["resolved_items"]}, set(serials))
