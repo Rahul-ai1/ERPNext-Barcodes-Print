@@ -224,9 +224,11 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		text_lines_after.append(_("Batch: {0}").format(row.batch_no))
 	if rules["show_serial_no"] and row.serial_no:
 		text_lines_after.append(_("Serial: {0}").format(row.serial_no))
+	item_lines = _item_master_lines(row, settings, rule_key)
+	text_lines_after.extend(line for line in item_lines if line.get("before_uom"))
 	if rules["show_uom"] and row.uom:
 		text_lines_after.append(f"UOM: {row.uom}")
-	text_lines_after.extend(_item_master_lines(row, settings, rule_key))
+	text_lines_after.extend(line for line in item_lines if not line.get("before_uom"))
 	if rules["show_rate"]:
 		# Last line on the label. None means no Item Price was found, so
 		# the line is "N/A" rather than a silent 0.00.
@@ -327,6 +329,12 @@ def _header_lines(settings: dict) -> list:
 	]
 
 
+def _is_net_weight(field) -> bool:
+	"""Net Weight prints above the UOM line."""
+	label = (field.get("label") or "").strip().lower()
+	return field.get("fieldname") == "weight_per_unit" or label == "net weight"
+
+
 def _item_master_lines(row, settings: dict, rule_key: str) -> list:
 	"""Extra Item master fields enabled for this display rule."""
 	values = getattr(row, "item_master_values", None) or {}
@@ -338,7 +346,7 @@ def _item_master_lines(row, settings: dict, rule_key: str) -> list:
 		if value:
 			lines.append({
 				"text": f"{field.get('label') or field['fieldname']}: {value}",
-				"bold": frappe.utils.cint(field.get("bold")),
+				"before_uom": _is_net_weight(field),
 			})
 	return lines
 

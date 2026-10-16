@@ -352,7 +352,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 
 		settings = get_barcode_print_settings()
 		small_zpl = build_label_zpl(row, settings, "Small")
-		self.assertEqual(small_zpl.count("Category: All Item Groups"), 2)
+		self.assertEqual(small_zpl.count("Category: All Item Groups"), 1)
 		self.assertEqual(small_zpl.count("Field Label Item"), 2)
 
 		medium_zpl = build_label_zpl(row, settings, "Medium")
@@ -706,6 +706,34 @@ class TestBarcodePrintManager(FrappeTestCase):
 		)
 		zpl = build_label_zpl(row, settings, "Large")
 		self.assertIn("^BQ", zpl)
+
+	def test_net_weight_prints_above_uom(self):
+		"""Net Weight is the line above UOM. Other extra fields stay below UOM."""
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Small"]["show_uom"] = 1
+		settings["display_rules"]["Small"]["show_rate"] = 0
+		settings["item_fields"] = [
+			{
+				"fieldname": "weight_per_unit",
+				"label": "Net Weight",
+				"bold": 0,
+				"rules": {"Small": 1},
+			},
+			{
+				"fieldname": "item_group",
+				"label": "Category",
+				"bold": 0,
+				"rules": {"Small": 1},
+			},
+		]
+		row = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X",
+			barcode="ABC123", barcode_type="CODE-39", uom="Nos", rate=None,
+			item_master_values={"weight_per_unit": "330 ml", "item_group": "Drinks"},
+		)
+		zpl = build_label_zpl(row, settings, "Small")
+		self.assertLess(zpl.index("Net Weight: 330 ml"), zpl.index("UOM:"))
+		self.assertLess(zpl.index("UOM:"), zpl.index("Category: Drinks"))
 
 	def test_rate_prints_with_mrp_label(self):
 		"""The price line on the label is captioned MRP."""
