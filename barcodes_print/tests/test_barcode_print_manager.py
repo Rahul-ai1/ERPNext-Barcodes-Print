@@ -439,6 +439,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 		zpl = get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Small")["zpl"]
 		self.assertIn("ABCDEF", zpl)
 		self.assertNotIn("GHIJKLMNOP", zpl)
+		self.assertNotIn(item_code, zpl)
 
 	def test_item_name_character_limit_cannot_be_negative(self):
 		settings_doc = frappe.get_single("Barcode Print Settings")
@@ -784,6 +785,23 @@ class TestBarcodePrintManager(FrappeTestCase):
 		missing = build_label_zpl(row, settings, "Small")
 		self.assertIn("MRP: N/A", missing)
 		self.assertNotIn("MRP: N/A (Inclusive of all taxes)", missing)
+
+	def test_rupee_symbol_is_drawn_because_font_0_has_no_glyph(self):
+		"""The printer's built-in font cannot draw ₹, so the label paints the sign."""
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Small"]["show_rate"] = 1
+		row = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X",
+			barcode="ABC123", barcode_type="CODE-39", uom="Nos", rate=150, currency="INR",
+		)
+		zpl = build_label_zpl(row, settings, "Small")
+		self.assertIn("^GFA,", zpl)
+		self.assertIn("MRP:", zpl)
+		self.assertIn("150.00", zpl)
+		self.assertIn("(Inclusive of all taxes)", zpl)
+		for line in zpl.splitlines():
+			if "^FD" in line:
+				self.assertNotIn("₹", line)
 
 	def test_alignment_left_starts_at_the_margin(self):
 		settings = get_barcode_print_settings()

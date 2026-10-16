@@ -190,7 +190,7 @@
   },
   {
    "default": "0",
-   "description": "Maximum characters of the item name printed on the label. 0 prints the full name.",
+   "description": "Maximum characters printed for the item name and the item code. 0 prints the full text.",
    "fieldname": "item_name_character_limit",
    "fieldtype": "Int",
    "label": "Item Name Character Limit",
@@ -280,7 +280,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-17 03:22:00.000000",
+ "modified": "2026-10-17 03:40:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",

@@ -217,7 +217,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 			"emphasis": True,
 		})
 	if rules["show_item_code"] and row.item:
-		text_lines_before.append(row.item)
+		text_lines_before.append(_limited_item_name(row.item, settings))
 
 	text_lines_after = []
 	if has_barcode and rules["show_barcode_number"]:
@@ -330,7 +330,7 @@ def _header_top_gap(lines, dpi: int) -> int:
 
 
 def _limited_item_name(item_name: str, settings: dict) -> str:
-	"""0 or blank prints the whole item name. A positive limit cuts it there."""
+	"""0 or blank prints the whole text. A positive limit cuts the item name and item code."""
 	limit = frappe.utils.cint(settings.get("item_name_character_limit"))
 	if limit > 0:
 		return item_name[:limit]
@@ -393,11 +393,104 @@ def _append_text_line(lines, entry, y, margin, available_width, fb_justify, text
 		text = entry
 		bold = False
 	font_h = _line_font_height(entry, text_h)
+	if any(sign in text for sign in _RUPEE_SIGNS):
+		return _append_rupee_line(lines, text, y, margin, available_width, fb_justify, font_h, line_spacing, bold)
 	field = f"^FB{available_width},1,0,{fb_justify}^A0N,{font_h},{font_h}^FD{_zpl_escape(text)}^FS"
 	lines.append(f"^FO{margin},{y}{field}")
 	if bold:
 		lines.append(f"^FO{margin + 1},{y}{field}")
 	return y + font_h + line_spacing
+
+
+# Font 0 cannot draw these signs, so the label paints a small picture instead.
+_RUPEE_SIGNS = ("₹", "₨")
+_RUPEE_ROWS = (
+	"11111110",
+	"00000000",
+	"11111110",
+	"10000000",
+	"11111000",
+	"10000100",
+	"10000100",
+	"11111000",
+	"10000000",
+	"10100000",
+	"10010000",
+	"10001000",
+	"10000100",
+)
+
+
+def _append_rupee_line(lines, text, y, margin, available_width, fb_justify, font_h, line_spacing, bold):
+	"""Draw the rupee sign between the text that comes before it and the text after it."""
+	sign = next(sign for sign in _RUPEE_SIGNS if sign in text)
+	prefix, suffix = text.split(sign, 1)
+	glyph_w, glyph_h, graphic = _rupee_graphic(font_h)
+	gap = max(2, font_h // 10)
+	prefix_gap = 0 if (not prefix or prefix.endswith(" ")) else gap
+	suffix_gap = 0 if (not suffix or suffix.startswith(" ")) else gap
+	prefix_w = _font0_text_width(prefix, font_h)
+	suffix_w = _font0_text_width(suffix, font_h)
+	total = prefix_w + prefix_gap + glyph_w + suffix_gap + suffix_w
+	alignment = {"L": "Left", "C": "Center", "R": "Right"}.get(fb_justify, "Left")
+	x = _aligned_x(alignment, margin, available_width, total)
+	glyph_y = y + max(0, font_h - glyph_h)
+
+	def paint(x_offset):
+		cursor = x + x_offset
+		if prefix:
+			_append_plain_text(lines, prefix, cursor, y, font_h)
+			cursor += prefix_w + prefix_gap
+		lines.append(f"^FO{cursor},{glyph_y}{graphic}")
+		cursor += glyph_w + suffix_gap
+		if suffix:
+			_append_plain_text(lines, suffix, cursor, y, font_h)
+
+	paint(0)
+	if bold:
+		paint(1)
+	return y + font_h + line_spacing
+
+
+def _append_plain_text(lines, text, x, y, font_h):
+	lines.append(f"^FO{x},{y}^A0N,{font_h},{font_h}^FD{_zpl_escape(text)}^FS")
+
+
+def _rupee_graphic(font_h: int) -> tuple[int, int, str]:
+	"""Scale the rupee picture up to the text height and return width, height, and ^GFA."""
+	scale = max(1, font_h // len(_RUPEE_ROWS))
+	pixels = []
+	for row in _RUPEE_ROWS:
+		expanded = "".join(bit * scale for bit in row)
+		if len(expanded) % 8:
+			expanded += "0" * (8 - len(expanded) % 8)
+		pixels.extend([expanded] * scale)
+	bytes_per_row = len(pixels[0]) // 8
+	hex_data = "".join(f"{int(row, 2):0{bytes_per_row * 2}X}" for row in pixels)
+	total = len(pixels) * bytes_per_row
+	return len(_RUPEE_ROWS[0]) * scale, len(pixels), f"^GFA,{total},{total},{bytes_per_row},{hex_data}"
+
+
+def _font0_text_width(text: str, font_h: int) -> int:
+	"""Approximate Font 0 width so the rupee picture sits next to the amount."""
+	width = 0.0
+	for char in text:
+		if char == " ":
+			factor = 0.33
+		elif char in ".,:;!'|":
+			factor = 0.28
+		elif char in "ilI1":
+			factor = 0.35
+		elif char in "MW@":
+			factor = 0.85
+		elif char.isupper():
+			factor = 0.67
+		elif char.isdigit():
+			factor = 0.55
+		else:
+			factor = 0.55
+		width += font_h * factor
+	return round(width)
 
 
 _FO_X = re.compile(r"\^FO(\d+),")
