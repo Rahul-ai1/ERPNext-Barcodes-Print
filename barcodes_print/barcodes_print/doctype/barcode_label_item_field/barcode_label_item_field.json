@@ -1,0 +1,86 @@
+{
+ "actions": [],
+ "creation": "2026-10-16 22:40:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item_field",
+  "field_label",
+  "show_small",
+  "show_medium",
+  "show_large",
+  "show_small_label_only",
+  "show_medium_label_only",
+  "show_large_label_only"
+ ],
+ "fields": [
+  {
+   "fieldname": "item_field",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Item Field",
+   "reqd": 1
+  },
+  {
+   "fieldname": "field_label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Label",
+   "read_only": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "show_small",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Small"
+  },
+  {
+   "default": "1",
+   "fieldname": "show_medium",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Medium"
+  },
+  {
+   "default": "1",
+   "fieldname": "show_large",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Large"
+  },
+  {
+   "default": "1",
+   "fieldname": "show_small_label_only",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Small Label Only"
+  },
+  {
+   "default": "1",
+   "fieldname": "show_medium_label_only",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Medium Label Only"
+  },
+  {
+   "default": "1",
+   "fieldname": "show_large_label_only",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Large Label Only"
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-16 22:40:00.000000",
+ "modified_by": "Administrator",
+ "module": "Barcodes Print",
+ "name": "Barcode Label Item Field",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "ASC",
+ "states": []
+}

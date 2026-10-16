@@ -44,19 +44,6 @@ DEFAULTS = {
 	"large_height_mm": 75,
 }
 
-# Fallback values for a fresh Display Rule row - matches the app's original
-# global toggle defaults, before per-size rules existed.
-DISPLAY_RULE_DEFAULTS = {
-	"alignment": "Left",
-	"show_item_name": 1,
-	"show_item_code": 1,
-	"show_barcode_number": 1,
-	"show_barcode_type": 1,
-	"show_uom": 1,
-	"show_rate": 0,
-	"show_batch_no": 1,
-	"show_serial_no": 1,
-}
 
 
 def after_install():
@@ -81,41 +68,69 @@ def seed_barcode_print_settings():
 		for field, value in DEFAULTS.items():
 			if doc.get(field) in (None, ""):
 				doc.set(field, value)
+		# Existing sites gained Number of Columns after the Single was
+		# created, so the column is 0 until the JSON default is applied.
+		columns = frappe.utils.cint(doc.number_of_columns)
+		if columns < 1 or columns > 4:
+			doc.number_of_columns = 1
+		if frappe.utils.flt(doc.column_gap_mm) < 0:
+			doc.column_gap_mm = 0
 		doc.save(ignore_permissions=True)
 
 
+def sync_display_rule_rows(doc) -> bool:
+	"""Keep Small, Medium, and Large, plus a Label Only row for each size.
+	Returns True when the document changed. Does not save."""
+	from frappe.utils import cint
+
+	from barcodes_print.api.barcode import (
+		CANONICAL_DISPLAY_RULES,
+		default_display_rule,
+		is_label_only_rule,
+	)
+
+	updated = False
+	seen = set()
+	for row in list(doc.display_rules or []):
+		if row.label_size not in CANONICAL_DISPLAY_RULES or row.label_size in seen:
+			doc.remove(row)
+			updated = True
+			continue
+		seen.add(row.label_size)
+		if is_label_only_rule(row.label_size) and (
+			cint(row.show_barcode_number) or cint(row.show_barcode_type)
+		):
+			row.show_barcode_number = 0
+			row.show_barcode_type = 0
+			updated = True
+		# Batch No/Serial No toggles were added after this table already had
+		# rows - a new column is NULL until backfilled, not merely unset.
+		defaults = default_display_rule(row.label_size)
+		if row.get("show_batch_no") is None:
+			row.show_batch_no = defaults["show_batch_no"]
+			updated = True
+		if row.get("show_serial_no") is None:
+			row.show_serial_no = defaults["show_serial_no"]
+			updated = True
+
+	for label in CANONICAL_DISPLAY_RULES:
+		if label in seen:
+			continue
+		row = {"label_size": label}
+		row.update(default_display_rule(label))
+		doc.append("display_rules", row)
+		updated = True
+
+	return updated
+
+
 def ensure_display_rules():
-	"""Every label size needs its own Display Rule row (what to show +
-	alignment) - seed the three fixed sizes if any are missing, so this
-	mandatory Table field is never left empty on a fresh install or for an
-	existing site upgrading from the old global-toggle-only version."""
+	"""Seed Small, Medium, Large, and one Label Only row per size."""
 	if not frappe.db.exists("DocType", "Barcode Print Settings"):
 		return
 
 	doc = frappe.get_single("Barcode Print Settings")
-	existing_sizes = {row.label_size for row in (doc.display_rules or [])}
-	updated = False
-	for size in ("Small", "Medium", "Large"):
-		if size in existing_sizes:
-			continue
-		row = {"label_size": size}
-		row.update(DISPLAY_RULE_DEFAULTS)
-		doc.append("display_rules", row)
-		updated = True
-
-	# Batch No/Serial No toggles were added after this table already had rows
-	# on existing sites - a brand new column is NULL for every pre-existing
-	# row until explicitly backfilled, not just "left unset", so this can't
-	# rely on the field's own schema-level default alone.
-	for row in doc.display_rules or []:
-		if row.get("show_batch_no") is None:
-			row.show_batch_no = DISPLAY_RULE_DEFAULTS["show_batch_no"]
-			updated = True
-		if row.get("show_serial_no") is None:
-			row.show_serial_no = DISPLAY_RULE_DEFAULTS["show_serial_no"]
-			updated = True
-
-	if updated:
+	if sync_display_rule_rows(doc):
 		doc.save(ignore_permissions=True)
 
 

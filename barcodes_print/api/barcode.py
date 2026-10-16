@@ -93,6 +93,54 @@ _DEFAULT_DISPLAY_RULE = {
 	"show_serial_no": 1,
 }
 
+# Small/Medium/Large print a barcode. The matching "Label Only" row is the
+# same physical size with no barcode.
+LABEL_ONLY_BY_SIZE = {
+	"Small": "Small Label Only",
+	"Medium": "Medium Label Only",
+	"Large": "Large Label Only",
+}
+CANONICAL_DISPLAY_RULES = (
+	"Small",
+	"Medium",
+	"Large",
+	"Small Label Only",
+	"Medium Label Only",
+	"Large Label Only",
+)
+
+
+def display_rule_key(label_size: str) -> str | None:
+	"""Return the settings key for one Display Rule row, or None if unknown."""
+	if label_size in CANONICAL_DISPLAY_RULES:
+		return label_size
+	return None
+
+
+def is_label_only_rule(label_size: str) -> bool:
+	return label_size in LABEL_ONLY_BY_SIZE.values()
+
+
+# Check columns on Barcode Label Item Field, in the same order as the grid.
+ITEM_FIELD_RULE_COLUMNS = (
+	("Small", "show_small"),
+	("Medium", "show_medium"),
+	("Large", "show_large"),
+	("Small Label Only", "show_small_label_only"),
+	("Medium Label Only", "show_medium_label_only"),
+	("Large Label Only", "show_large_label_only"),
+)
+
+
+def default_display_rule(label_size: str) -> dict:
+	"""Fresh toggles for one Display Rule row. Label Only rows never print
+	a barcode number or type."""
+	rule = dict(_DEFAULT_DISPLAY_RULE)
+	if is_label_only_rule(label_size):
+		rule["show_barcode_number"] = 0
+		rule["show_barcode_type"] = 0
+	return rule
+
 
 @frappe.whitelist()
 def get_print_barcode_page_defaults() -> dict:
@@ -113,11 +161,12 @@ def get_print_barcode_page_defaults() -> dict:
 def get_barcode_print_settings() -> dict:
 	settings = frappe.get_single("Barcode Print Settings")
 
-	display_rules = {size: dict(_DEFAULT_DISPLAY_RULE) for size in ("Small", "Medium", "Large")}
+	display_rules = {label: default_display_rule(label) for label in CANONICAL_DISPLAY_RULES}
 	for row in settings.get("display_rules") or []:
-		if row.label_size not in display_rules:
+		key = display_rule_key(row.label_size)
+		if not key:
 			continue
-		display_rules[row.label_size] = {
+		display_rules[key] = {
 			"alignment": row.alignment or "Left",
 			"show_item_name": cint(row.show_item_name),
 			"show_item_code": cint(row.show_item_code),
@@ -128,6 +177,16 @@ def get_barcode_print_settings() -> dict:
 			"show_batch_no": cint(row.show_batch_no),
 			"show_serial_no": cint(row.show_serial_no),
 		}
+
+	item_fields = []
+	for row in settings.get("item_display_fields") or []:
+		if not row.item_field:
+			continue
+		item_fields.append({
+			"fieldname": row.item_field,
+			"label": row.field_label or row.item_field,
+			"rules": {rule: cint(row.get(column)) for rule, column in ITEM_FIELD_RULE_COLUMNS},
+		})
 
 	return {
 		"display_rules": display_rules,
@@ -147,6 +206,7 @@ def get_barcode_print_settings() -> dict:
 		"max_extra_barcodes_per_line": cint(settings.get("max_extra_barcodes_per_line") or 0),
 		"unlimited_reprints": cint(settings.get("unlimited_reprints")),
 		"default_price_list": settings.get("default_price_list") or "",
+		"item_fields": item_fields,
 	}
 
 

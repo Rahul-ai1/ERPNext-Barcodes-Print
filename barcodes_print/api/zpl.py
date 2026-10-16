@@ -24,12 +24,13 @@ import frappe
 from frappe import _
 
 from barcodes_print.api.barcode import (
+	LABEL_ONLY_BY_SIZE,
 	MATRIX_FORMATS,
 	get_barcode_print_settings,
 	get_display_barcode_type,
 	validate_barcode_compatibility,
 )
-from barcodes_print.api.item import get_item_barcode_details
+from barcodes_print.api.item import get_item_barcode_details, get_item_master_values
 
 LABEL_SIZES = ("Small", "Medium", "Large")
 MAX_LABEL_COLUMNS = 4
@@ -152,16 +153,21 @@ def _aligned_x(alignment: str, margin: int, available_width: int, content_width:
 def build_label_zpl(row, settings: dict, size: str) -> str:
 	"""Build the ZPL for exactly one physical label (^XA ... ^XZ)."""
 	width_dots, height_dots = get_label_dimensions_dots(settings, size)
-	rules = settings["display_rules"][size]
+	has_barcode = bool((row.barcode or "").strip())
+	# No barcode: use that size's Label Only row. Dimensions stay on size.
+	rule_key = size if has_barcode else LABEL_ONLY_BY_SIZE[size]
+	rules = settings["display_rules"][rule_key]
 	alignment = rules.get("alignment") or "Left"
 
-	is_valid, resolved_fmt, err_msg = validate_barcode_compatibility(row.barcode, row.barcode_type)
-	if not is_valid:
-		frappe.throw(
-			_("Row #{0}: Barcode value '{1}' is invalid for Barcode Type '{2}'. {3}").format(
-				row.idx, row.barcode, row.barcode_type, err_msg
+	resolved_fmt = ""
+	if has_barcode:
+		is_valid, resolved_fmt, err_msg = validate_barcode_compatibility(row.barcode, row.barcode_type)
+		if not is_valid:
+			frappe.throw(
+				_("Row #{0}: Barcode value '{1}' is invalid for Barcode Type '{2}'. {3}").format(
+					row.idx, row.barcode, row.barcode_type, err_msg
+				)
 			)
-		)
 
 	# Text lines to print, in order, computed up front so the barcode gets
 	# whatever vertical room is left over - this is what keeps the label
@@ -175,9 +181,9 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		text_lines_before.append(row.item)
 
 	text_lines_after = []
-	if rules["show_barcode_number"]:
+	if has_barcode and rules["show_barcode_number"]:
 		text_lines_after.append(row.barcode)
-	if rules["show_barcode_type"]:
+	if has_barcode and rules["show_barcode_type"]:
 		text_lines_after.append(row.barcode_type)
 	if rules["show_batch_no"] and row.batch_no:
 		text_lines_after.append(_("Batch: {0}").format(row.batch_no))
@@ -190,6 +196,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		# Price List (or none was configured at all) - printed as "N/A"
 		# rather than silently showing "0.00" or skipping the line.
 		text_lines_after.append(frappe.utils.fmt_money(row.rate) if row.rate is not None else _("N/A"))
+	text_lines_after.extend(_item_master_lines(row, settings, rule_key))
 
 	n_lines = len(text_lines_before) + len(text_lines_after)
 
@@ -207,22 +214,23 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 	barcode_gap = mm_to_dots(1.5, settings["printer_dpi"])
 	min_barcode_height = mm_to_dots(6.0, settings["printer_dpi"])
 
-	barcode_height_dots = max(
-		min_barcode_height,
-		height_dots - (2 * margin) - (n_lines * line_gap) - barcode_gap,
-	)
-
-	if resolved_fmt in MATRIX_FORMATS:
-		barcode_height_mm = barcode_height_dots * 25.4 / settings["printer_dpi"]
-		if barcode_height_mm < MIN_MATRIX_SCAN_HEIGHT_MM:
-			frappe.throw(
-				_(
-					"Row #{0}: {1} needs at least {2}mm to scan reliably, but only {3:.1f}mm is available on "
-					"a {4} label with the current display toggles. Pick a larger label size, turn off some "
-					"display toggles to leave more room, or switch this row to a linear barcode type "
-					"(EAN/UPC/Code 39/Code 128)."
-				).format(row.idx, get_display_barcode_type("", resolved_fmt), MIN_MATRIX_SCAN_HEIGHT_MM, barcode_height_mm, size)
-			)
+	barcode_height_dots = 0
+	if has_barcode:
+		barcode_height_dots = max(
+			min_barcode_height,
+			height_dots - (2 * margin) - (n_lines * line_gap) - barcode_gap,
+		)
+		if resolved_fmt in MATRIX_FORMATS:
+			barcode_height_mm = barcode_height_dots * 25.4 / settings["printer_dpi"]
+			if barcode_height_mm < MIN_MATRIX_SCAN_HEIGHT_MM:
+				frappe.throw(
+					_(
+						"Row #{0}: {1} needs at least {2}mm to scan reliably, but only {3:.1f}mm is available on "
+						"a {4} label with the current display toggles. Pick a larger label size, turn off some "
+						"display toggles to leave more room, or switch this row to a linear barcode type "
+						"(EAN/UPC/Code 39/Code 128)."
+					).format(row.idx, get_display_barcode_type("", resolved_fmt), MIN_MATRIX_SCAN_HEIGHT_MM, barcode_height_mm, size)
+				)
 
 	lines = ["^XA", f"^PW{width_dots}", f"^LL{height_dots}", "^LH0,0", "^CI28"]
 	available_width = width_dots - (2 * margin)
@@ -236,12 +244,13 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		lines.append(f"^FO{margin},{y}^FB{available_width},1,0,{fb_justify}^A0N,{text_h},{text_h}^FD{_zpl_escape(text)}^FS")
 		y += line_gap
 
-	barcode_width_dots = _estimate_barcode_width_dots(resolved_fmt, row.barcode, barcode_height_dots, module_width_dots)
-	barcode_x = _aligned_x(alignment, margin, available_width, barcode_width_dots)
-	barcode_zpl = _barcode_field_zpl(resolved_fmt, row.barcode, barcode_height_dots)
-	lines.append(f"^FO{barcode_x},{y}^BY{module_width_dots},3,{barcode_height_dots}")
-	lines.append(barcode_zpl)
-	y += barcode_height_dots + barcode_gap
+	if has_barcode:
+		barcode_width_dots = _estimate_barcode_width_dots(resolved_fmt, row.barcode, barcode_height_dots, module_width_dots)
+		barcode_x = _aligned_x(alignment, margin, available_width, barcode_width_dots)
+		barcode_zpl = _barcode_field_zpl(resolved_fmt, row.barcode, barcode_height_dots)
+		lines.append(f"^FO{barcode_x},{y}^BY{module_width_dots},3,{barcode_height_dots}")
+		lines.append(barcode_zpl)
+		y += barcode_height_dots + barcode_gap
 
 	for text in text_lines_after:
 		lines.append(f"^FO{margin},{y}^FB{available_width},1,0,{fb_justify}^A0N,{text_h},{text_h}^FD{_zpl_escape(text)}^FS")
@@ -249,6 +258,19 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 
 	lines.append("^XZ")
 	return "\n".join(lines)
+
+
+def _item_master_lines(row, settings: dict, rule_key: str) -> list:
+	"""Extra Item master fields enabled for this display rule."""
+	values = getattr(row, "item_master_values", None) or {}
+	lines = []
+	for field in settings.get("item_fields") or []:
+		if not (field.get("rules") or {}).get(rule_key):
+			continue
+		value = values.get(field["fieldname"])
+		if value:
+			lines.append(f"{field.get('label') or field['fieldname']}: {value}")
+	return lines
 
 
 _FO_X = re.compile(r"\^FO(\d+),")
@@ -402,20 +424,23 @@ def resolve_row(
 			frappe.throw(
 				_("Item {0} has {1} barcodes. Please select which one to print.").format(item_code, len(available))
 			)
-		frappe.throw(_("Item {0} does not have a barcode. Please add barcode in Item Master.").format(item_code))
-
-	is_valid, resolved_fmt, err_msg = validate_barcode_compatibility(row.barcode, row.barcode_type)
-	if not is_valid:
-		disp_type = get_display_barcode_type(row.barcode, row.barcode_type, row.item)
-		frappe.throw(
-			_("Row #{0}: Barcode value '{1}' is invalid for Barcode Type '{2}'. {3}").format(
-				row.idx, row.barcode, disp_type or row.barcode_type, err_msg
+		# No barcode on the item: print a text label. build_label_zpl
+		# uses that size's Label Only display rule and skips the barcode.
+	else:
+		is_valid, resolved_fmt, err_msg = validate_barcode_compatibility(row.barcode, row.barcode_type)
+		if not is_valid:
+			disp_type = get_display_barcode_type(row.barcode, row.barcode_type, row.item)
+			frappe.throw(
+				_("Row #{0}: Barcode value '{1}' is invalid for Barcode Type '{2}'. {3}").format(
+					row.idx, row.barcode, disp_type or row.barcode_type, err_msg
+				)
 			)
-		)
 
-	if not (row.barcode_type or "").strip():
-		row.barcode_type = get_display_barcode_type(row.barcode, resolved_fmt, row.item)
+		if not (row.barcode_type or "").strip():
+			row.barcode_type = get_display_barcode_type(row.barcode, resolved_fmt, row.item)
 
+	fieldnames = [field["fieldname"] for field in get_barcode_print_settings().get("item_fields") or []]
+	row.item_master_values = get_item_master_values(item_code, fieldnames)
 	return row
 
 

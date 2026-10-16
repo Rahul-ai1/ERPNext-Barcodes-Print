@@ -1,0 +1,8 @@
+# Copyright (c) 2026, Rahul Chaudhary and contributors
+# For license information, please see license.txt
+
+from frappe.model.document import Document
+
+
+class BarcodeLabelItemField(Document):
+	pass

@@ -127,3 +127,88 @@ def get_available_serial_nos(item_code: str, batch_no: str = "") -> list:
 		order_by="creation desc",
 		limit_page_length=500,
 	)
+
+
+# Item Name, Item Code, and UOM already have their own Display Rule toggles.
+EXCLUDED_ITEM_FIELDS = {"item_name", "item_code", "stock_uom"}
+PRINTABLE_ITEM_FIELDTYPES = {
+	"Data",
+	"Link",
+	"Select",
+	"Int",
+	"Float",
+	"Currency",
+	"Date",
+	"Datetime",
+	"Time",
+	"Check",
+	"Percent",
+	"Small Text",
+	"Read Only",
+	"Phone",
+	"Dynamic Link",
+	"Duration",
+}
+
+
+def iter_item_master_fields():
+	"""Parent Item fields a label can print. Skips layout, tables, and the
+	three fields Display Rules already cover."""
+	meta = frappe.get_meta("Item")
+	for df in meta.fields:
+		if df.fieldname in EXCLUDED_ITEM_FIELDS:
+			continue
+		if df.fieldtype not in PRINTABLE_ITEM_FIELDTYPES:
+			continue
+		if df.get("is_virtual"):
+			continue
+		yield df
+
+
+def item_master_field_map() -> dict:
+	return {df.fieldname: df for df in iter_item_master_fields()}
+
+
+@frappe.whitelist()
+def get_item_master_fields() -> list:
+	"""Field list for the Item Master Fields picker on Barcode Print Settings."""
+	frappe.has_permission("Barcode Print Settings", "read", throw=True)
+	return [
+		{"fieldname": df.fieldname, "label": df.label or df.fieldname}
+		for df in iter_item_master_fields()
+	]
+
+
+def format_item_field_value(df, value) -> str:
+	"""One Item field as label text. Blank and unchecked values are omitted."""
+	if value in (None, ""):
+		return ""
+	if df.fieldtype == "Check":
+		return "Yes" if cint(value) else ""
+	if df.fieldtype == "Currency":
+		return frappe.utils.fmt_money(value)
+	if df.fieldtype == "Date":
+		return frappe.utils.formatdate(value)
+	if df.fieldtype == "Datetime":
+		return frappe.utils.format_datetime(value)
+	return str(value).strip()
+
+
+def get_item_master_values(item_code: str, fieldnames: list) -> dict:
+	"""Values for the Item fields configured on Barcode Print Settings."""
+	if not item_code or not fieldnames:
+		return {}
+	if not frappe.db.exists("Item", item_code):
+		return {}
+
+	item = frappe.get_cached_doc("Item", item_code)
+	fields = item_master_field_map()
+	values = {}
+	for fieldname in fieldnames:
+		df = fields.get(fieldname)
+		if not df:
+			continue
+		text = format_item_field_value(df, item.get(fieldname))
+		if text:
+			values[fieldname] = text
+	return values

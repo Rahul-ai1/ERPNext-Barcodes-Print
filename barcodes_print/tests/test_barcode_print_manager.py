@@ -65,10 +65,11 @@ class TestBarcodePrintManager(FrappeTestCase):
 		settings.large_height_mm = 75
 		settings.number_of_columns = 1
 		settings.column_gap_mm = 0
+		settings.set("item_display_fields", [])
 		settings.save(ignore_permissions=True)
 
 	def _set_display_rule(self, settings_doc, size, **overrides):
-		"""Test helper: update one size's Display Rule row in place and save."""
+		"""Test helper: update one Display Rule row in place and save."""
 		for row in settings_doc.display_rules:
 			if row.label_size == size:
 				row.update(overrides)
@@ -103,9 +104,8 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertEqual(row.barcode_type, "EAN-13")
 
 	def test_autofetch_case2_barcode_not_available(self):
-		"""Case 2: Item without barcode in Item Master -> resolve_row blocks
-		with the plan's exact business rule 5.2 message unless a barcode is
-		supplied directly."""
+		"""Item without a barcode still resolves, using that size's Label Only
+		rule. A barcode supplied directly is used."""
 		item_code = f"TEST-ITEM-NO-BARCODE-{frappe.generate_hash(length=6)}"
 		frappe.get_doc({
 			"doctype": "Item",
@@ -120,8 +120,9 @@ class TestBarcodePrintManager(FrappeTestCase):
 		details = get_item_barcode_details(item_code)
 		self.assertEqual(details.get("barcode"), "")
 
-		with self.assertRaises(frappe.ValidationError):
-			resolve_row(item_code, no_of_barcodes=1)
+		row = resolve_row(item_code, no_of_barcodes=1)
+		self.assertEqual(row.item, item_code)
+		self.assertEqual(row.barcode, "")
 
 		row = resolve_row(item_code, barcode="MANUAL12345", barcode_type="CODE-128", no_of_barcodes=1)
 		self.assertEqual(row.item, item_code)
@@ -129,8 +130,8 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertEqual(row.barcode_type, "CODE-128")
 
 	def test_mandatory_barcode_only(self):
-		"""Business rule 5.2: only a missing Barcode blocks - Barcode Type is
-		optional and gets auto-detected/backfilled when omitted."""
+		"""A missing barcode is allowed (text label). When a barcode is
+		present, Barcode Type is optional and gets auto-detected."""
 		item_code = f"TEST-ITEM-MANDATORY-{frappe.generate_hash(length=6)}"
 		frappe.get_doc({
 			"doctype": "Item",
@@ -141,8 +142,8 @@ class TestBarcodePrintManager(FrappeTestCase):
 			"stock_uom": "Nos",
 		}).insert(ignore_permissions=True)
 
-		with self.assertRaises(frappe.ValidationError):
-			resolve_row(item_code, barcode_type="CODE-128", no_of_barcodes=1)
+		row = resolve_row(item_code, barcode_type="CODE-128", no_of_barcodes=1)
+		self.assertEqual(row.barcode, "")
 
 		row = resolve_row(item_code, barcode="12345678", no_of_barcodes=1)
 		self.assertTrue((row.barcode_type or "").strip())
@@ -225,6 +226,10 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertIn("Small", settings["display_rules"])
 		self.assertIn("Medium", settings["display_rules"])
 		self.assertIn("Large", settings["display_rules"])
+		for label in ("Small Label Only", "Medium Label Only", "Large Label Only"):
+			self.assertIn(label, settings["display_rules"])
+			self.assertEqual(settings["display_rules"][label]["show_barcode_number"], 0)
+			self.assertEqual(settings["display_rules"][label]["show_barcode_type"], 0)
 		self.assertIn("show_barcode_type", settings["display_rules"]["Medium"])
 		self.assertIn("alignment", settings["display_rules"]["Medium"])
 		self.assertIn("print_connector", settings)
@@ -252,6 +257,84 @@ class TestBarcodePrintManager(FrappeTestCase):
 			self.assertEqual(rules["Large"]["alignment"], "Right")
 		finally:
 			self.setUp()
+
+	def test_label_without_barcode_uses_that_sizes_label_only_rule(self):
+		"""A label with no barcode follows that size's Label Only row, not
+		the Small/Medium/Large barcode row, and does not emit a barcode."""
+		item_code = f"TEST-ITEM-TEXT-LABEL-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "Text Only Label",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": "Nos",
+		}).insert(ignore_permissions=True)
+
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Small"]["show_item_name"] = 0
+		settings["display_rules"]["Small Label Only"].update({
+			"show_item_name": 1,
+			"show_item_code": 1,
+			"show_uom": 0,
+		})
+		settings["display_rules"]["Medium Label Only"]["show_item_name"] = 0
+
+		row = resolve_row(item_code, no_of_barcodes=1)
+		small_zpl = build_label_zpl(row, settings, "Small")
+		self.assertIn("Text Only Label", small_zpl)
+		self.assertIn(item_code, small_zpl)
+		self.assertNotIn("UOM:", small_zpl)
+		self.assertNotIn("^BY", small_zpl)
+
+		medium_zpl = build_label_zpl(row, settings, "Medium")
+		self.assertNotIn("Text Only Label", medium_zpl)
+		self.assertNotIn("^BY", medium_zpl)
+
+		job = get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Medium")
+		self.assertNotIn("^BY", job["zpl"])
+		self.assertEqual(job["resolved_items"][0]["barcode"], "")
+
+	def test_item_master_field_prints_only_on_checked_rules(self):
+		"""An added Item field prints on the sizes that are checked, and
+		resolve_row loads the value from Item master."""
+		item_code = f"TEST-ITEM-FIELD-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "Field Label Item",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": "Nos",
+			"barcodes": [{"barcode": _random_ean13(), "barcode_type": "EAN-13"}],
+		}).insert(ignore_permissions=True)
+
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.append("item_display_fields", {
+			"item_field": "item_group",
+			"show_small": 1,
+			"show_medium": 0,
+			"show_large": 0,
+			"show_small_label_only": 0,
+			"show_medium_label_only": 1,
+			"show_large_label_only": 0,
+		})
+		settings_doc.save(ignore_permissions=True)
+
+		row = resolve_row(item_code, no_of_barcodes=1)
+		self.assertEqual(row.item_master_values.get("item_group"), "All Item Groups")
+
+		settings = get_barcode_print_settings()
+		small_zpl = build_label_zpl(row, settings, "Small")
+		self.assertIn("Item Group: All Item Groups", small_zpl)
+
+		medium_zpl = build_label_zpl(row, settings, "Medium")
+		self.assertNotIn("Item Group:", medium_zpl)
+
+		row.barcode = ""
+		label_only_zpl = build_label_zpl(row, settings, "Medium")
+		self.assertIn("Item Group: All Item Groups", label_only_zpl)
+		self.assertNotIn("^BY", label_only_zpl)
 
 	def test_invalid_barcode_value_validation(self):
 		"""Test that invalid barcode values produce clear validation messages and are rejected."""

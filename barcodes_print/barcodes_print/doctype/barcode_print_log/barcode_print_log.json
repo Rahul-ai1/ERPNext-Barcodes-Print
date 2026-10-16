@@ -49,8 +49,7 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Barcode",
-   "read_only": 1,
-   "reqd": 1
+   "read_only": 1
   },
   {
    "fieldname": "barcode_type",
@@ -188,7 +187,7 @@
  "in_create": 1,
  "is_submittable": 0,
  "links": [],
- "modified": "2026-09-30 00:00:00.000000",
+ "modified": "2026-10-16 22:15:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Log",
