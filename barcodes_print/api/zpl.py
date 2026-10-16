@@ -67,6 +67,16 @@ def is_label_only_choice(size: str) -> bool:
 	return size in LABEL_ONLY_BY_SIZE.values()
 
 
+def canonical_label_size(size: str) -> str:
+	"""Match a print-page choice. Ignores capitalisation and extra spaces
+	so 'small label only' still selects Small Label Only."""
+	cleaned = " ".join(str(size or "").replace("\u00a0", " ").split())
+	for choice in PRINT_LABEL_CHOICES:
+		if cleaned.lower() == choice.lower():
+			return choice
+	return cleaned
+
+
 def get_label_dimensions_dots(settings: dict, size: str) -> tuple[int, int]:
 	width_field, height_field = LABEL_SIZE_SETTINGS_FIELDS[physical_label_size(size)]
 	dpi = settings["printer_dpi"]
@@ -656,6 +666,7 @@ def get_quick_print_job(
 	sends this, unmodified, straight to QZ Tray or Zebra Browser Print -
 	no PDF, no print preview, no browser print dialog, and nothing is
 	saved as a document - this is a one-time-use print action."""
+	size = canonical_label_size(size)
 	if size not in PRINT_LABEL_CHOICES:
 		frappe.throw(_("Invalid label size '{0}'.").format(size))
 
@@ -760,6 +771,7 @@ def log_print(
 	so success/failure is only knowable per batch here, not per individual
 	label within it - a "Failed" status means none of that row's requested
 	labels were confirmed printed."""
+	size = canonical_label_size(size)
 	if size not in PRINT_LABEL_CHOICES:
 		frappe.throw(_("Invalid label size '{0}'.").format(size))
 	if status not in ("Success", "Failed"):

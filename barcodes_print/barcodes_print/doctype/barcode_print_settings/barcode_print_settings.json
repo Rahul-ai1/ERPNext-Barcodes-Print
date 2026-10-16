@@ -44,10 +44,11 @@
   },
   {
    "default": "QZ Tray",
+   "description": "File saves the labels as a .zpl file on this computer. Use it when no printer is connected. QZ Tray and Zebra Browser Print send the same file straight to a printer.",
    "fieldname": "print_connector",
    "fieldtype": "Select",
    "label": "Print Connector",
-   "options": "QZ Tray\nZebra Browser Print",
+   "options": "QZ Tray\nZebra Browser Print\nFile",
    "reqd": 1
   },
   {
@@ -246,7 +247,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-16 23:10:00.000000",
+ "modified": "2026-10-16 23:32:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",

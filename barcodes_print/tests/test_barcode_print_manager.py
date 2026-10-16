@@ -354,6 +354,18 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertIn("Category: All Item Groups", label_only_zpl)
 		self.assertNotIn("^BY", label_only_zpl)
 
+	def test_file_connector_returns_the_same_zpl_job(self):
+		"""Print Connector File still builds the ZPL job. The browser saves it."""
+		item_code = self._create_test_item_with_barcode()
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.print_connector = "File"
+		settings_doc.save(ignore_permissions=True)
+
+		job = get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Small")
+		self.assertEqual(job["connector"], "File")
+		self.assertIn("^XA", job["zpl"])
+		self.assertIn("^XZ", job["zpl"])
+
 	def test_header_text_prints_above_item_name(self):
 		"""A free-text header prints first, one ZPL row per line."""
 		item_code = self._create_test_item_with_barcode()
@@ -381,6 +393,10 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertIn(item_name, job["zpl"])
 		self.assertEqual(float(job["label_width_mm"]), 50.0)
 		self.assertEqual(float(job["label_height_mm"]), 25.0)
+
+		spaced = get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], " small label only ")
+		self.assertNotIn("^BY", spaced["zpl"])
+		self.assertEqual(float(spaced["label_width_mm"]), 50.0)
 
 		barcode_job = get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Small")
 		self.assertIn("^BY", barcode_job["zpl"])

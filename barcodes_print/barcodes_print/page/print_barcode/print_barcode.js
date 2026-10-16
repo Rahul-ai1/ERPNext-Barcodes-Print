@@ -383,6 +383,9 @@ barcodes_print.print_barcode_page.render = function (page) {
 		page.set_primary_action(__("Print"), () => {
 			barcodes_print.print_barcode_page.print();
 		}, "printer");
+		page.set_secondary_action(__("Save to File"), () => {
+			barcodes_print.print_barcode_page.print("file");
+		}, "download");
 
 		barcodes_print.print_barcode_page._state = {
 			page,
@@ -500,10 +503,29 @@ barcodes_print.print_barcode_page.apply_route_options = function () {
 	});
 };
 
-barcodes_print.print_barcode_page.print = function () {
+// Printer-less path: the same ZPL the printer would receive, saved as a
+// .zpl file so it can be sent later from a machine that has the printer.
+barcodes_print.file = {
+	print(job) {
+		const blob = new Blob([job.zpl], { type: "text/plain;charset=utf-8" });
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		const stamp = (frappe.datetime.now_datetime() || "labels").replace(/[: ]/g, "-");
+		link.href = url;
+		link.download = `barcode-labels-${stamp}.zpl`;
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+		URL.revokeObjectURL(url);
+		return Promise.resolve();
+	},
+};
+
+barcodes_print.print_barcode_page.print = function (destination) {
 	const state = barcodes_print.print_barcode_page._state;
 	const items = state.items_control.get_value();
-	const size = state.size_control.get_value();
+	const selected = state.size_control.$input && state.size_control.$input.find("option:selected");
+	const size = cstr((selected && selected.attr("value")) || state.size_control.get_value()).trim();
 
 	if (!(items || []).length) {
 		frappe.msgprint(__("Please add at least one item row."));
@@ -531,8 +553,12 @@ barcodes_print.print_barcode_page.print = function () {
 				return;
 			}
 
-			const connector =
-				job.connector === "Zebra Browser Print" ? barcodes_print.zebra : barcodes_print.qz;
+			const save_to_file = destination === "file" || job.connector === "File";
+			const connector = save_to_file
+				? barcodes_print.file
+				: job.connector === "Zebra Browser Print"
+					? barcodes_print.zebra
+					: barcodes_print.qz;
 
 			const finish_log = (status, failure_reason) =>
 				frappe.call({
@@ -551,7 +577,9 @@ barcodes_print.print_barcode_page.print = function () {
 				.print(job)
 				.then(() => {
 					frappe.show_alert({
-						message: __("Sent {0} label(s) to the printer.", [job.total_labels]),
+						message: save_to_file
+							? __("Saved {0} label(s) to a ZPL file.", [job.total_labels])
+							: __("Sent {0} label(s) to the printer.", [job.total_labels]),
 						indicator: "green",
 					});
 					finish_log("Success");
