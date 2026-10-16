@@ -286,12 +286,15 @@ barcodes_print.print_barcode_page.render = function (page) {
 	const $source_banner = $("<div>").appendTo($wrapper);
 
 	$(`<p class="text-muted">${__(
-		"Add items below, choose a label size, and print directly to your label printer. Nothing here is saved as a document - each print is a one-time action."
+		"Add items below, choose a label size and how many columns, and print directly to your label printer. Nothing here is saved as a document - each print is a one-time action."
 	)}</p>`).appendTo($wrapper);
 
 	const $items_area = $('<div style="margin-bottom: 10px;">').appendTo($wrapper);
 	const $total_area = $('<div class="text-muted" style="margin-bottom: 20px; font-size: 13px;">').appendTo($wrapper);
-	const $size_area = $('<div style="max-width: 200px;">').appendTo($wrapper);
+	const $options_row = $('<div class="row">').appendTo($wrapper);
+	const $size_area = $('<div class="col-sm-4">').appendTo($options_row);
+	const $columns_area = $('<div class="col-sm-4">').appendTo($options_row);
+	const $gap_area = $('<div class="col-sm-4">').appendTo($options_row);
 
 	// The Price List column's per-row default needs Barcode Print
 	// Settings' Default Price List up front, so the grid itself isn't
@@ -301,7 +304,10 @@ barcodes_print.print_barcode_page.render = function (page) {
 	return frappe.call({
 		method: "barcodes_print.api.barcode.get_print_barcode_page_defaults",
 	}).then((r) => {
-		const default_price_list = (r.message || {}).default_price_list || "";
+		const defaults = r.message || {};
+		const default_price_list = defaults.default_price_list || "";
+		const default_columns = String(cint(defaults.number_of_columns) || 1);
+		const default_gap = flt(defaults.column_gap_mm) || 0;
 
 		const items_control = frappe.ui.form.make_control({
 			parent: $items_area,
@@ -343,6 +349,36 @@ barcodes_print.print_barcode_page.render = function (page) {
 		size_control.refresh();
 		size_control.set_value("Medium");
 
+		const columns_control = frappe.ui.form.make_control({
+			parent: $columns_area,
+			df: {
+				fieldname: "number_of_columns",
+				fieldtype: "Select",
+				label: __("Number of Columns"),
+				options: "1\n2\n3\n4",
+				default: default_columns,
+				reqd: 1,
+				description: __("2 prints two labels side by side on each row."),
+			},
+			render_input: true,
+		});
+		columns_control.refresh();
+		columns_control.set_value(default_columns);
+
+		const gap_control = frappe.ui.form.make_control({
+			parent: $gap_area,
+			df: {
+				fieldname: "column_gap_mm",
+				fieldtype: "Float",
+				label: __("Gap Between Columns (mm)"),
+				default: default_gap,
+				description: __("Space between labels in a row. Used when columns is more than 1."),
+			},
+			render_input: true,
+		});
+		gap_control.refresh();
+		gap_control.set_value(default_gap);
+
 		page.set_primary_action(__("Print"), () => {
 			barcodes_print.print_barcode_page.print();
 		}, "printer");
@@ -351,6 +387,8 @@ barcodes_print.print_barcode_page.render = function (page) {
 			page,
 			items_control,
 			size_control,
+			columns_control,
+			gap_control,
 			default_price_list,
 			$source_banner,
 			$total_area,
@@ -479,6 +517,8 @@ barcodes_print.print_barcode_page.print = function () {
 				size,
 				source_doctype: state.source_doctype || "",
 				source_name: state.source_name || "",
+				number_of_columns: state.columns_control.get_value(),
+				column_gap_mm: state.gap_control.get_value() || 0,
 			},
 			freeze: true,
 			freeze_message: __("Preparing labels..."),

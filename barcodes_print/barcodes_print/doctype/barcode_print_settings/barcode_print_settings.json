@@ -9,6 +9,10 @@
   "default_label_printer",
   "column_break_connector",
   "printer_dpi",
+  "columns_section",
+  "number_of_columns",
+  "column_break_columns",
+  "column_gap_mm",
   "label_size_section",
   "small_width_mm",
   "small_height_mm",
@@ -62,6 +66,32 @@
    "label": "Printer DPI",
    "options": "203\n300\n600",
    "reqd": 1
+  },
+  {
+   "fieldname": "columns_section",
+   "fieldtype": "Section Break",
+   "label": "Columns"
+  },
+  {
+   "default": "1",
+   "description": "How many labels sit side by side on one row of the roll. 2 prints two labels in a row. The printer media must be wide enough for that many labels plus the gap.",
+   "fieldname": "number_of_columns",
+   "fieldtype": "Int",
+   "label": "Number of Columns",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_columns",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "Blank space between labels in the same row, in millimetres. Match the gap on the label stock. 0 places the next label immediately beside the previous one. Ignored when Number of Columns is 1.",
+   "fieldname": "column_gap_mm",
+   "fieldtype": "Float",
+   "label": "Gap Between Columns (mm)",
+   "non_negative": 1
   },
   {
    "fieldname": "label_size_section",
@@ -201,7 +231,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-09-30 02:00:00.000000",
+ "modified": "2026-10-16 16:40:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",

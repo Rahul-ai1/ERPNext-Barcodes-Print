@@ -4,7 +4,7 @@
 import re
 
 import frappe
-from frappe.utils.data import cint
+from frappe.utils.data import cint, flt
 
 BARCODE_TYPE_MAP = {
 	"EAN-13": "ean13",
@@ -101,7 +101,13 @@ def get_print_barcode_page_defaults() -> dict:
 	row's Price List) - the full settings dict is read-restricted to
 	System Manager, but anyone allowed to use this page needs this much."""
 	frappe.has_permission("Barcode Print Log", "read", throw=True)
-	return {"default_price_list": frappe.db.get_single_value("Barcode Print Settings", "default_price_list") or ""}
+	# get_single_value skips the System Manager-only read on Barcode Print
+	# Settings. Stock users who can print still need these defaults.
+	return {
+		"default_price_list": frappe.db.get_single_value("Barcode Print Settings", "default_price_list") or "",
+		"number_of_columns": cint(frappe.db.get_single_value("Barcode Print Settings", "number_of_columns")) or 1,
+		"column_gap_mm": flt(frappe.db.get_single_value("Barcode Print Settings", "column_gap_mm")),
+	}
 
 
 def get_barcode_print_settings() -> dict:
@@ -128,6 +134,8 @@ def get_barcode_print_settings() -> dict:
 		"print_connector": settings.get("print_connector") or "QZ Tray",
 		"default_label_printer": settings.get("default_label_printer") or "",
 		"printer_dpi": cint(settings.get("printer_dpi") or 203),
+		"number_of_columns": cint(settings.get("number_of_columns")) or 1,
+		"column_gap_mm": flt(settings.get("column_gap_mm")),
 		"small_width_mm": settings.get("small_width_mm") or 50,
 		"small_height_mm": settings.get("small_height_mm") or 25,
 		"medium_width_mm": settings.get("medium_width_mm") or 75,

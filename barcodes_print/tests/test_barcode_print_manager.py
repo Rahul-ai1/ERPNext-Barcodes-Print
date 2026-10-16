@@ -63,6 +63,8 @@ class TestBarcodePrintManager(FrappeTestCase):
 		settings.medium_height_mm = 50
 		settings.large_width_mm = 100
 		settings.large_height_mm = 75
+		settings.number_of_columns = 1
+		settings.column_gap_mm = 0
 		settings.save(ignore_permissions=True)
 
 	def _set_display_rule(self, settings_doc, size, **overrides):
@@ -397,8 +399,43 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertEqual(job["total_labels"], 3)
 		self.assertEqual(job["zpl"].count("^XA"), 3)
 		self.assertEqual(job["zpl"].count("^XZ"), 3)
+		self.assertEqual(job["number_of_columns"], 1)
 		self.assertEqual(job["connector"], "QZ Tray")
 		self.assertEqual(len(job["resolved_items"]), 1)
+
+	def test_two_columns_prints_two_labels_per_row(self):
+		"""Number of Columns 2 places the next label beside the first and
+		feeds the roll only after the row is full. Three labels become two
+		print rows: a pair, then the leftover on the left of a full-width row."""
+		item_code = self._create_test_item_with_barcode()
+		settings = get_barcode_print_settings()
+		width_dots, _height_dots = get_label_dimensions_dots(settings, "Medium")
+		gap_mm = 3
+		gap_dots = round(gap_mm * settings["printer_dpi"] / 25.4)
+		print_width = (2 * width_dots) + gap_dots
+
+		job = get_quick_print_job(
+			[{"item": item_code, "no_of_barcodes": 3}],
+			"Medium",
+			number_of_columns=2,
+			column_gap_mm=gap_mm,
+		)
+		self.assertEqual(job["total_labels"], 3)
+		self.assertEqual(job["number_of_columns"], 2)
+		rows = [block for block in job["zpl"].split("^XA") if block.strip()]
+		self.assertEqual(len(rows), 2)
+		self.assertEqual(rows[0].count("^PW" + str(print_width)), 1)
+		self.assertEqual(rows[1].count("^PW" + str(print_width)), 1)
+
+		origins = [int(match) for match in re.findall(r"\^FO(\d+),", rows[0])]
+		self.assertIn(width_dots + gap_dots, {origin - origins[0] for origin in origins})
+
+	def test_get_quick_print_job_rejects_invalid_columns(self):
+		item_code = self._create_test_item_with_barcode()
+		with self.assertRaises(frappe.ValidationError):
+			get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Medium", number_of_columns=0)
+		with self.assertRaises(frappe.ValidationError):
+			get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Medium", number_of_columns=5)
 
 	def test_get_quick_print_job_multiple_items(self):
 		item_a = self._create_test_item_with_barcode()

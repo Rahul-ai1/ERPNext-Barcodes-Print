@@ -32,6 +32,7 @@ from barcodes_print.api.barcode import (
 from barcodes_print.api.item import get_item_barcode_details
 
 LABEL_SIZES = ("Small", "Medium", "Large")
+MAX_LABEL_COLUMNS = 4
 
 # ISO/best-practice QR/Data Matrix scanning thresholds: 10mm is the absolute
 # floor for a standard smartphone/handheld scanner to read reliably at all;
@@ -248,6 +249,74 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 
 	lines.append("^XZ")
 	return "\n".join(lines)
+
+
+_FO_X = re.compile(r"\^FO(\d+),")
+
+
+def _shift_field_x(line: str, offset: int) -> str:
+	"""Move one label's fields across the roll. Only the ^FO origin changes;
+	barcode commands that follow it stay attached to that origin."""
+	if not offset or not line.startswith("^FO"):
+		return line
+	return _FO_X.sub(lambda match: f"^FO{int(match.group(1)) + offset},", line, count=1)
+
+
+def _label_body(zpl: str) -> list[str]:
+	"""Field commands for one label, without the ^XA/^PW/^LL wrapper."""
+	body = []
+	for line in zpl.splitlines():
+		if line in ("^XA", "^XZ") or line.startswith(("^PW", "^LL", "^LH", "^CI")):
+			continue
+		body.append(line)
+	return body
+
+
+def combine_label_zpl(
+	label_zpls: list[str], columns: int, width_dots: int, height_dots: int, gap_dots: int
+) -> str:
+	"""Place labels across the roll. One column keeps each label as its own
+	print (unchanged). Two or more columns put that many labels on one row
+	and advance the media only after the row is full. A short last row still
+	uses the full row width so the next print lines up with the stock."""
+	if columns <= 1:
+		return "\n".join(label_zpls)
+
+	print_width = (columns * width_dots) + ((columns - 1) * gap_dots)
+	pitch = width_dots + gap_dots
+	bodies = [_label_body(zpl) for zpl in label_zpls]
+	rows = []
+	for start in range(0, len(bodies), columns):
+		lines = ["^XA", f"^PW{print_width}", f"^LL{height_dots}", "^LH0,0", "^CI28"]
+		for col, body in enumerate(bodies[start : start + columns]):
+			offset = col * pitch
+			lines.extend(_shift_field_x(line, offset) for line in body)
+		lines.append("^XZ")
+		rows.append("\n".join(lines))
+	return "\n".join(rows)
+
+
+def _resolve_columns(number_of_columns, settings: dict) -> int:
+	if number_of_columns in (None, ""):
+		columns = frappe.utils.cint(settings.get("number_of_columns")) or 1
+	else:
+		columns = frappe.utils.cint(number_of_columns)
+	if columns < 1 or columns > MAX_LABEL_COLUMNS:
+		frappe.throw(_("Number of Columns must be between 1 and {0}.").format(MAX_LABEL_COLUMNS))
+	return columns
+
+
+def _resolve_column_gap_dots(column_gap_mm, settings: dict, columns: int) -> int:
+	if columns <= 1:
+		return 0
+	if column_gap_mm in (None, ""):
+		gap_mm = frappe.utils.flt(settings.get("column_gap_mm"))
+	else:
+		gap_mm = frappe.utils.flt(column_gap_mm)
+	if gap_mm < 0:
+		frappe.throw(_("Gap Between Columns cannot be negative."))
+	# mm_to_dots() forces at least 1 dot, which would shove a 0mm gap.
+	return max(0, round(gap_mm * settings["printer_dpi"] / 25.4))
 
 
 def resolve_row(
@@ -497,7 +566,14 @@ def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 
 
 @frappe.whitelist()
-def get_quick_print_job(items, size: str, source_doctype: str = "", source_name: str = "") -> dict:
+def get_quick_print_job(
+	items,
+	size: str,
+	source_doctype: str = "",
+	source_name: str = "",
+	number_of_columns=None,
+	column_gap_mm=None,
+) -> dict:
 	"""Server-side step of the print flow (plan step 6.6/3): resolve and
 	validate every row, then build the full ZPL print job. The browser
 	sends this, unmodified, straight to QZ Tray or Zebra Browser Print -
@@ -522,6 +598,8 @@ def get_quick_print_job(items, size: str, source_doctype: str = "", source_name:
 
 	items = _parse_items(items)
 	settings = get_barcode_print_settings()
+	columns = _resolve_columns(number_of_columns, settings)
+	gap_dots = _resolve_column_gap_dots(column_gap_mm, settings, columns)
 
 	blocks = []
 	resolved_items = []
@@ -571,10 +649,12 @@ def get_quick_print_job(items, size: str, source_doctype: str = "", source_name:
 			resolved_items.append(dict(row))
 
 	width_mm_field, height_mm_field = LABEL_SIZE_SETTINGS_FIELDS[size]
+	width_dots, height_dots = get_label_dimensions_dots(settings, size)
 
 	return {
-		"zpl": "\n".join(blocks),
+		"zpl": combine_label_zpl(blocks, columns, width_dots, height_dots, gap_dots),
 		"total_labels": total_labels,
+		"number_of_columns": columns,
 		"connector": settings["print_connector"],
 		"printer": settings["default_label_printer"],
 		"label_width_mm": settings[width_mm_field],
