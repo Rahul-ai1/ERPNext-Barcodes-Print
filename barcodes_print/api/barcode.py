@@ -217,6 +217,7 @@ def get_barcode_print_settings() -> dict:
 		"header_text": (settings.get("header_text") or "").strip(),
 		"header_alignment": settings.get("header_alignment") or "Left",
 		"line_spacing_mm": _line_spacing_mm(settings.get("line_spacing_mm")),
+		"item_name_character_limit": cint(settings.get("item_name_character_limit")),
 		"item_fields": item_fields,
 	}
 

@@ -211,7 +211,11 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 	# as soon as more than 2-3 toggles are enabled together).
 	text_lines_before = _header_lines(settings)
 	if rules["show_item_name"] and row.item_name:
-		text_lines_before.append({"text": row.item_name, "bold": True, "emphasis": True})
+		text_lines_before.append({
+			"text": _limited_item_name(row.item_name, settings),
+			"bold": True,
+			"emphasis": True,
+		})
 	if rules["show_item_code"] and row.item:
 		text_lines_before.append(row.item)
 
@@ -323,6 +327,14 @@ def _header_top_gap(lines, dpi: int) -> int:
 	if any(isinstance(line, dict) and line.get("header") for line in lines):
 		return mm_to_dots(1.5, dpi)
 	return 0
+
+
+def _limited_item_name(item_name: str, settings: dict) -> str:
+	"""0 or blank prints the whole item name. A positive limit cuts it there."""
+	limit = frappe.utils.cint(settings.get("item_name_character_limit"))
+	if limit > 0:
+		return item_name[:limit]
+	return item_name
 
 
 def _header_lines(settings: dict) -> list:

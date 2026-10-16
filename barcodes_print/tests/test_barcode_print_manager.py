@@ -85,6 +85,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 		settings.header_text = ""
 		settings.header_alignment = "Left"
 		settings.line_spacing_mm = 0.6
+		settings.item_name_character_limit = 0
 		settings.save(ignore_permissions=True)
 
 	def _set_display_rule(self, settings_doc, size, **overrides):
@@ -417,6 +418,31 @@ class TestBarcodePrintManager(FrappeTestCase):
 	def test_line_spacing_cannot_be_negative(self):
 		settings_doc = frappe.get_single("Barcode Print Settings")
 		settings_doc.line_spacing_mm = -1
+		self.assertRaises(frappe.ValidationError, settings_doc.save)
+
+	def test_item_name_character_limit_cuts_the_printed_name(self):
+		"""A positive Item Name Character Limit prints only that many characters."""
+		item_code = f"TEST-ITEM-LIMIT-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "ABCDEFGHIJKLMNOP",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": "Nos",
+			"barcodes": [{"barcode": _random_ean13(), "barcode_type": "EAN-13"}],
+		}).insert(ignore_permissions=True)
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.item_name_character_limit = 6
+		settings_doc.save(ignore_permissions=True)
+
+		zpl = get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Small")["zpl"]
+		self.assertIn("ABCDEF", zpl)
+		self.assertNotIn("GHIJKLMNOP", zpl)
+
+	def test_item_name_character_limit_cannot_be_negative(self):
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.item_name_character_limit = -1
 		self.assertRaises(frappe.ValidationError, settings_doc.save)
 
 	def test_print_page_label_only_choice_skips_barcode(self):

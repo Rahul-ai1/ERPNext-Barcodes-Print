@@ -77,6 +77,8 @@ def seed_barcode_print_settings():
 			doc.column_gap_mm = 0
 		if doc.get("line_spacing_mm") in (None, ""):
 			doc.line_spacing_mm = 0.6
+		if doc.get("item_name_character_limit") in (None, ""):
+			doc.item_name_character_limit = 0
 		doc.save(ignore_permissions=True)
 
 

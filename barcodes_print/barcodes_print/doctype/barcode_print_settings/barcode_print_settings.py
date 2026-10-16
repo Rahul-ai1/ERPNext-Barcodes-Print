@@ -16,6 +16,8 @@ class BarcodePrintSettings(Document):
 			frappe.throw(_("Gap Between Columns cannot be negative."))
 		if flt(self.line_spacing_mm) < 0:
 			frappe.throw(_("Line Spacing cannot be negative."))
+		if cint(self.item_name_character_limit) < 0:
+			frappe.throw(_("Item Name Character Limit cannot be negative."))
 		from barcodes_print.install.after_install import (
 			sync_display_rule_rows,
 			sync_item_display_field_rows,
