@@ -249,6 +249,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		for entry in text_lines_before + text_lines_after
 	)
 	margin = mm_to_dots(1.5, settings["printer_dpi"])
+	header_top_gap = _header_top_gap(text_lines_before, settings["printer_dpi"])
 	barcode_gap = mm_to_dots(1.5, settings["printer_dpi"])
 	min_barcode_height = mm_to_dots(6.0, settings["printer_dpi"])
 
@@ -256,7 +257,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 	if has_barcode:
 		barcode_height_dots = max(
 			min_barcode_height,
-			height_dots - (2 * margin) - text_block - barcode_gap,
+			height_dots - (2 * margin) - header_top_gap - text_block - barcode_gap,
 		)
 		if resolved_fmt in MATRIX_FORMATS:
 			barcode_height_mm = barcode_height_dots * 25.4 / settings["printer_dpi"]
@@ -274,7 +275,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 	available_width = width_dots - (2 * margin)
 	fb_justify = {"Left": "L", "Center": "C", "Right": "R"}.get(alignment, "L")
 
-	y = margin
+	y = margin + header_top_gap
 	for text in text_lines_before:
 		# ^FB (Field Block) gives text fields native justification within
 		# a width - no barcode does, so the barcode below is positioned
@@ -317,13 +318,20 @@ def _line_spacing_dots(settings: dict) -> int:
 	return max(0, round(spacing_mm * dpi / 25.4))
 
 
+def _header_top_gap(lines, dpi: int) -> int:
+	"""Extra space above the header. Labels without a header keep the normal margin."""
+	if any(isinstance(line, dict) and line.get("header") for line in lines):
+		return mm_to_dots(1.5, dpi)
+	return 0
+
+
 def _header_lines(settings: dict) -> list:
 	"""Free-text header from Barcode Print Settings, one printed row per line.
 	Header alignment is separate from the Display Rule alignment."""
 	header = (settings.get("header_text") or "").strip()
 	justify = {"Left": "L", "Center": "C", "Right": "R"}.get(settings.get("header_alignment") or "Left", "L")
 	return [
-		{"text": line.strip(), "justify": justify, "bold": True, "emphasis": True}
+		{"text": line.strip(), "justify": justify, "bold": True, "emphasis": True, "header": True}
 		for line in header.splitlines()
 		if line.strip()
 	]

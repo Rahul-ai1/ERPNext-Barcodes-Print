@@ -397,6 +397,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 		code_line = next(line for line in zpl.splitlines() if item_code in line and "^A0N" in line)
 		self.assertGreater(_font_height(header_line), _font_height(code_line))
 		self.assertGreater(_font_height(name_line), _font_height(code_line))
+		self.assertGreater(_text_row_y(zpl, "ACME STORES"), mm_to_dots(1.5, 203))
 
 	def test_line_spacing_increases_the_gap_between_text_rows(self):
 		"""Line Spacing is the extra millimetres between one text row and the next."""
