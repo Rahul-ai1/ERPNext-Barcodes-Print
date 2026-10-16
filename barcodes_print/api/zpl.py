@@ -248,11 +248,12 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 	text_h = mm_to_dots(text_height_mm, settings["printer_dpi"])
 	module_width_dots = mm_to_dots(module_width_mm, settings["printer_dpi"])
 	line_spacing = _line_spacing_dots(settings)
+	margin = mm_to_dots(1.5, settings["printer_dpi"])
+	available_width = width_dots - (2 * margin)
 	text_block = sum(
-		_line_font_height(entry, text_h) + line_spacing
+		_fitted_font_height(_line_text(entry), _line_font_height(entry, text_h), available_width) + line_spacing
 		for entry in text_lines_before + text_lines_after
 	)
-	margin = mm_to_dots(1.5, settings["printer_dpi"])
 	header_top_gap = _header_top_gap(text_lines_before, settings["printer_dpi"])
 	barcode_gap = mm_to_dots(1.5, settings["printer_dpi"])
 	min_barcode_height = mm_to_dots(6.0, settings["printer_dpi"])
@@ -276,7 +277,6 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 				)
 
 	lines = ["^XA", f"^PW{width_dots}", f"^LL{height_dots}", "^LH0,0", "^CI28"]
-	available_width = width_dots - (2 * margin)
 	fb_justify = {"Left": "L", "Center": "C", "Right": "R"}.get(alignment, "L")
 
 	y = margin + header_top_gap
@@ -382,6 +382,23 @@ def _line_font_height(entry, text_h: int) -> int:
 	return text_h
 
 
+def _line_text(entry) -> str:
+	if isinstance(entry, dict):
+		return entry.get("text") or ""
+	return entry or ""
+
+
+def _fitted_font_height(text: str, font_h: int, max_width: int) -> int:
+	"""Shrink a line that is wider than the label. Stop at a readable minimum."""
+	if not text or max_width <= 0:
+		return font_h
+	minimum = max(12, round(font_h * 0.55))
+	fitted = font_h
+	while fitted > minimum and _font0_text_width(text, fitted) > max_width:
+		fitted -= 1
+	return fitted
+
+
 def _append_text_line(lines, entry, y, margin, available_width, fb_justify, text_h, line_spacing):
 	"""Print one text row. Font 0 has no bold face, so Bold reprints the
 	same text one dot to the right and the strokes look heavier."""
@@ -392,9 +409,9 @@ def _append_text_line(lines, entry, y, margin, available_width, fb_justify, text
 	else:
 		text = entry
 		bold = False
-	font_h = _line_font_height(entry, text_h)
-	# ^FB wraps text that does not fit, and a one-line field then prints that
-	# tail back over the start of the same line. Cut it off first.
+	font_h = _fitted_font_height(text, _line_font_height(entry, text_h), available_width)
+	# A line that is still too wide at the smallest readable size is cut.
+	# Otherwise the printer wraps the tail back over the start of the line.
 	text = _fit_text_to_width(text, font_h, available_width)
 	if any(sign in text for sign in _RUPEE_SIGNS):
 		return _append_rupee_line(lines, text, y, margin, available_width, fb_justify, font_h, line_spacing, bold)

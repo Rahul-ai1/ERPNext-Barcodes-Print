@@ -9,6 +9,7 @@ from frappe.tests.utils import FrappeTestCase
 from barcodes_print.api.barcode import get_barcode_print_settings, validate_barcode_compatibility
 from barcodes_print.api.item import get_item_barcode_details
 from barcodes_print.api.zpl import (
+	_emphasis_height,
 	_format_mrp,
 	build_label_zpl,
 	get_label_dimensions_dots,
@@ -786,8 +787,8 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertIn("MRP: N/A", missing)
 		self.assertNotIn("MRP: N/A (Inclusive of all taxes)", missing)
 
-	def test_text_wider_than_the_label_is_cut_instead_of_wrapping(self):
-		"""A line longer than the label is cut. The printer would otherwise print the tail over the start."""
+	def test_long_item_name_shrinks_to_fit_the_label(self):
+		"""A long name is printed smaller so the whole name fits on one line."""
 		settings = get_barcode_print_settings()
 		settings["item_name_character_limit"] = 0
 		settings["display_rules"]["Small"]["show_item_name"] = 1
@@ -799,9 +800,10 @@ class TestBarcodePrintManager(FrappeTestCase):
 			barcode="ABC123", barcode_type="CODE-39", uom="Nos", rate=None,
 		)
 		zpl = build_label_zpl(row, settings, "Small")
-		self.assertIn("SCHEWEPPS GINGER ALE CAN", zpl)
-		self.assertNotIn(name, zpl)
-		self.assertNotIn("320ML", zpl)
+		self.assertIn(name, zpl)
+		name_line = next(line for line in zpl.splitlines() if name in line)
+		normal = _emphasis_height(mm_to_dots(2.5, 203))
+		self.assertLess(_font_height(name_line), normal)
 
 	def test_rupee_symbol_is_drawn_because_font_0_has_no_glyph(self):
 		"""The printer's built-in font cannot draw ₹, so the label paints the sign."""
