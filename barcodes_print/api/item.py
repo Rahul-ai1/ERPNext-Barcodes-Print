@@ -157,10 +157,16 @@ PRINTABLE_ITEM_FIELDTYPES = {
 TEXT_ITEM_FIELDTYPES = {"Text", "Small Text", "Long Text", "Text Editor"}
 
 
+# Already printed from Display Rules. The extra-field picker does not list them again.
+DISPLAY_RULE_ITEM_FIELDS = {"item_name", "item_code", "stock_uom"}
+
+
 def iter_item_master_fields():
-	"""Every parent Item field a label can print, in Item form order."""
+	"""Parent Item fields that can be added as extra label lines, in form order."""
 	meta = frappe.get_meta("Item")
 	for df in meta.fields:
+		if df.fieldname in DISPLAY_RULE_ITEM_FIELDS:
+			continue
 		if df.fieldtype not in PRINTABLE_ITEM_FIELDTYPES:
 			continue
 		if df.get("is_virtual"):

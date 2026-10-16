@@ -27,6 +27,7 @@
   "header_text",
   "header_alignment",
   "display_rules",
+  "add_item_display_field",
   "item_display_fields",
   "pricing_section",
   "default_price_list",
@@ -194,7 +195,12 @@
    "options": "Barcode Label Display Rule"
   },
   {
-   "description": "Every printable Item field is listed. Tick a size to print it, and edit Label to change the text shown before the value. New fields start unchecked. Item Name, Item Code, and UOM are also on Display Rules.",
+   "fieldname": "add_item_display_field",
+   "fieldtype": "Button",
+   "label": "Add Row"
+  },
+  {
+   "description": "Extra Item fields. Use Add Row to include another field. Item Name, Item Code, Barcode Number, Barcode Type, UOM, MRP, Batch No, and Serial No are already on Display Rules.",
    "fieldname": "item_display_fields",
    "fieldtype": "Table",
    "label": "Item Master Fields",
@@ -265,7 +271,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-17 01:05:00.000000",
+ "modified": "2026-10-17 02:06:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",

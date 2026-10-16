@@ -321,27 +321,18 @@ class TestBarcodePrintManager(FrappeTestCase):
 		}).insert(ignore_permissions=True)
 
 		settings_doc = frappe.get_single("Barcode Print Settings")
-		fieldnames = {row.item_field for row in settings_doc.item_display_fields}
-		self.assertIn("item_name", fieldnames)
-		self.assertIn("item_code", fieldnames)
-		self.assertIn("stock_uom", fieldnames)
-		self.assertIn("description", fieldnames)
-		self.assertIn("item_group", fieldnames)
-		description = next(row for row in settings_doc.item_display_fields if row.item_field == "description")
-		self.assertEqual(int(description.show_small or 0), 0)
-
-		for row in settings_doc.item_display_fields:
-			if row.item_field != "item_group":
-				continue
-			row.field_label = "Category"
-			row.show_small = 1
-			row.show_medium = 0
-			row.show_large = 0
-			row.show_small_label_only = 0
-			row.show_medium_label_only = 1
-			row.show_large_label_only = 0
-			row.bold = 1
-			break
+		self.assertFalse(settings_doc.item_display_fields)
+		settings_doc.append("item_display_fields", {
+			"item_field": "item_group",
+			"field_label": "Category",
+			"bold": 1,
+			"show_small": 1,
+			"show_medium": 0,
+			"show_large": 0,
+			"show_small_label_only": 0,
+			"show_medium_label_only": 1,
+			"show_large_label_only": 0,
+		})
 		settings_doc.save(ignore_permissions=True)
 		settings_doc.reload()
 		saved = next(row for row in settings_doc.item_display_fields if row.item_field == "item_group")

@@ -88,7 +88,7 @@ _DEFAULT_DISPLAY_RULE = {
 	"show_barcode_number": 1,
 	"show_barcode_type": 1,
 	"show_uom": 1,
-	"show_rate": 0,
+	"show_rate": 1,
 	"show_batch_no": 1,
 	"show_serial_no": 1,
 }
