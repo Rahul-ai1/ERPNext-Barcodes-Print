@@ -124,6 +124,56 @@ def sync_display_rule_rows(doc) -> bool:
 	return updated
 
 
+ITEM_FIELD_CHECKS = (
+	"show_small",
+	"show_medium",
+	"show_large",
+	"show_small_label_only",
+	"show_medium_label_only",
+	"show_large_label_only",
+)
+
+
+def sync_item_display_field_rows(doc) -> bool:
+	"""List every printable Item field. Keeps an edited Label and existing
+	size checks. New rows are unchecked. Does not save."""
+	from barcodes_print.api.item import iter_item_master_fields
+
+	updated = False
+	seen = set()
+	for row in list(doc.item_display_fields or []):
+		if not row.item_field or row.item_field in seen:
+			doc.remove(row)
+			updated = True
+			continue
+		seen.add(row.item_field)
+
+	allowed = {df.fieldname: df for df in iter_item_master_fields()}
+	present = {row.item_field for row in doc.item_display_fields or []}
+	for fieldname, df in allowed.items():
+		if fieldname in present:
+			continue
+		doc.append("item_display_fields", {
+			"item_field": fieldname,
+			"field_label": df.label or fieldname,
+			"bold": 0,
+			**{name: 0 for name in ITEM_FIELD_CHECKS},
+		})
+		updated = True
+
+	for row in list(doc.item_display_fields or []):
+		df = allowed.get(row.item_field)
+		if not df:
+			doc.remove(row)
+			updated = True
+			continue
+		if not (row.field_label or "").strip():
+			row.field_label = df.label or row.item_field
+			updated = True
+
+	return updated
+
+
 def ensure_display_rules():
 	"""Seed Small, Medium, Large, and one Label Only row per size."""
 	if not frappe.db.exists("DocType", "Barcode Print Settings"):

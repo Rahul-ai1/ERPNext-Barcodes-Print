@@ -286,7 +286,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 	const $source_banner = $("<div>").appendTo($wrapper);
 
 	$(`<p class="text-muted">${__(
-		"Add items below, choose a label size and how many columns, and print directly to your label printer. Nothing here is saved as a document - each print is a one-time action."
+		"Add items below, choose a label size and how many columns, and print directly to your label printer. Label Only sizes print the same label with no barcode. Nothing here is saved as a document - each print is a one-time action."
 	)}</p>`).appendTo($wrapper);
 
 	const $items_area = $('<div style="margin-bottom: 10px;">').appendTo($wrapper);
@@ -340,9 +340,10 @@ barcodes_print.print_barcode_page.render = function (page) {
 				fieldname: "size",
 				fieldtype: "Select",
 				label: __("Label Size"),
-				options: "Small\nMedium\nLarge",
+				options: "Small\nMedium\nLarge\nSmall Label Only\nMedium Label Only\nLarge Label Only",
 				default: "Medium",
 				reqd: 1,
+				description: __("Label Only prints that size with no barcode."),
 			},
 			render_input: true,
 		});

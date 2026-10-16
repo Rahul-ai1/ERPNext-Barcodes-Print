@@ -124,7 +124,7 @@
    "fieldtype": "Select",
    "in_standard_filter": 1,
    "label": "Label Size",
-   "options": "Small\nMedium\nLarge",
+   "options": "Small\nMedium\nLarge\nSmall Label Only\nMedium Label Only\nLarge Label Only",
    "read_only": 1
   },
   {
@@ -187,7 +187,7 @@
  "in_create": 1,
  "is_submittable": 0,
  "links": [],
- "modified": "2026-10-16 22:15:00.000000",
+ "modified": "2026-10-16 23:05:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Log",

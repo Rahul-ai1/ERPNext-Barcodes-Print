@@ -185,6 +185,7 @@ def get_barcode_print_settings() -> dict:
 		item_fields.append({
 			"fieldname": row.item_field,
 			"label": row.field_label or row.item_field,
+			"bold": cint(row.get("bold")),
 			"rules": {rule: cint(row.get(column)) for rule, column in ITEM_FIELD_RULE_COLUMNS},
 		})
 
@@ -206,6 +207,7 @@ def get_barcode_print_settings() -> dict:
 		"max_extra_barcodes_per_line": cint(settings.get("max_extra_barcodes_per_line") or 0),
 		"unlimited_reprints": cint(settings.get("unlimited_reprints")),
 		"default_price_list": settings.get("default_price_list") or "",
+		"header_text": (settings.get("header_text") or "").strip(),
 		"item_fields": item_fields,
 	}
 

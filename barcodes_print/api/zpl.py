@@ -33,6 +33,9 @@ from barcodes_print.api.barcode import (
 from barcodes_print.api.item import get_item_barcode_details, get_item_master_values
 
 LABEL_SIZES = ("Small", "Medium", "Large")
+# Print Barcode page choices. The three Label Only values use that size's
+# dimensions and its no-barcode display rule.
+PRINT_LABEL_CHOICES = LABEL_SIZES + tuple(LABEL_ONLY_BY_SIZE.values())
 MAX_LABEL_COLUMNS = 4
 
 # ISO/best-practice QR/Data Matrix scanning thresholds: 10mm is the absolute
@@ -52,8 +55,20 @@ def mm_to_dots(value_mm: float, dpi: int) -> int:
 	return max(1, round((value_mm or 0) * dpi / 25.4))
 
 
+def physical_label_size(size: str) -> str:
+	"""Small Label Only uses the Small dimensions, and the same for Medium and Large."""
+	for physical, label_only in LABEL_ONLY_BY_SIZE.items():
+		if size == label_only:
+			return physical
+	return size
+
+
+def is_label_only_choice(size: str) -> bool:
+	return size in LABEL_ONLY_BY_SIZE.values()
+
+
 def get_label_dimensions_dots(settings: dict, size: str) -> tuple[int, int]:
-	width_field, height_field = LABEL_SIZE_SETTINGS_FIELDS[size]
+	width_field, height_field = LABEL_SIZE_SETTINGS_FIELDS[physical_label_size(size)]
 	dpi = settings["printer_dpi"]
 	return mm_to_dots(settings[width_field], dpi), mm_to_dots(settings[height_field], dpi)
 
@@ -153,9 +168,18 @@ def _aligned_x(alignment: str, margin: int, available_width: int, content_width:
 def build_label_zpl(row, settings: dict, size: str) -> str:
 	"""Build the ZPL for exactly one physical label (^XA ... ^XZ)."""
 	width_dots, height_dots = get_label_dimensions_dots(settings, size)
-	has_barcode = bool((row.barcode or "").strip())
-	# No barcode: use that size's Label Only row. Dimensions stay on size.
-	rule_key = size if has_barcode else LABEL_ONLY_BY_SIZE[size]
+	physical = physical_label_size(size)
+	# An explicit Label Only choice never prints a barcode, even when the
+	# item has one. A Small/Medium/Large choice falls back to Label Only
+	# only when the item itself has no barcode.
+	label_only = is_label_only_choice(size)
+	has_barcode = bool((row.barcode or "").strip()) and not label_only
+	if label_only:
+		rule_key = size
+	elif has_barcode:
+		rule_key = physical
+	else:
+		rule_key = LABEL_ONLY_BY_SIZE[physical]
 	rules = settings["display_rules"][rule_key]
 	alignment = rules.get("alignment") or "Left"
 
@@ -174,7 +198,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 	# from overflowing its own physical height when several display
 	# toggles are on at once (fixed proportions of label height overflow
 	# as soon as more than 2-3 toggles are enabled together).
-	text_lines_before = []
+	text_lines_before = _header_lines(settings)
 	if rules["show_item_name"] and row.item_name:
 		text_lines_before.append(row.item_name)
 	if rules["show_item_code"] and row.item:
@@ -205,8 +229,8 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 	# bug: a Medium/Large label ended up with the exact same small,
 	# narrow-barred content as Small, just floating in a corner with the
 	# rest of the label left empty instead of actually filling it.
-	text_height_mm = {"Small": 2.5, "Medium": 3.3, "Large": 4.2}[size]
-	module_width_mm = {"Small": 0.25, "Medium": 0.4, "Large": 0.5}[size]
+	text_height_mm = {"Small": 2.5, "Medium": 3.3, "Large": 4.2}[physical]
+	module_width_mm = {"Small": 0.25, "Medium": 0.4, "Large": 0.5}[physical]
 	text_h = mm_to_dots(text_height_mm, settings["printer_dpi"])
 	module_width_dots = mm_to_dots(module_width_mm, settings["printer_dpi"])
 	line_gap = text_h + mm_to_dots(0.6, settings["printer_dpi"])
@@ -241,8 +265,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		# ^FB (Field Block) gives text fields native justification within
 		# a width - no barcode does, so the barcode below is positioned
 		# manually further down using an estimated rendered width instead.
-		lines.append(f"^FO{margin},{y}^FB{available_width},1,0,{fb_justify}^A0N,{text_h},{text_h}^FD{_zpl_escape(text)}^FS")
-		y += line_gap
+		y = _append_text_line(lines, text, y, margin, available_width, fb_justify, text_h, line_gap)
 
 	if has_barcode:
 		barcode_width_dots = _estimate_barcode_width_dots(resolved_fmt, row.barcode, barcode_height_dots, module_width_dots)
@@ -253,11 +276,16 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		y += barcode_height_dots + barcode_gap
 
 	for text in text_lines_after:
-		lines.append(f"^FO{margin},{y}^FB{available_width},1,0,{fb_justify}^A0N,{text_h},{text_h}^FD{_zpl_escape(text)}^FS")
-		y += line_gap
+		y = _append_text_line(lines, text, y, margin, available_width, fb_justify, text_h, line_gap)
 
 	lines.append("^XZ")
 	return "\n".join(lines)
+
+
+def _header_lines(settings: dict) -> list:
+	"""Free-text header from Barcode Print Settings, one printed row per line."""
+	header = (settings.get("header_text") or "").strip()
+	return [line.strip() for line in header.splitlines() if line.strip()]
 
 
 def _item_master_lines(row, settings: dict, rule_key: str) -> list:
@@ -269,8 +297,27 @@ def _item_master_lines(row, settings: dict, rule_key: str) -> list:
 			continue
 		value = values.get(field["fieldname"])
 		if value:
-			lines.append(f"{field.get('label') or field['fieldname']}: {value}")
+			lines.append({
+				"text": f"{field.get('label') or field['fieldname']}: {value}",
+				"bold": frappe.utils.cint(field.get("bold")),
+			})
 	return lines
+
+
+def _append_text_line(lines, entry, y, margin, available_width, fb_justify, text_h, line_gap):
+	"""Print one text row. Font 0 has no bold face, so Bold reprints the
+	same text one dot to the right and the strokes look heavier."""
+	if isinstance(entry, dict):
+		text = entry.get("text") or ""
+		bold = bool(entry.get("bold"))
+	else:
+		text = entry
+		bold = False
+	field = f"^FB{available_width},1,0,{fb_justify}^A0N,{text_h},{text_h}^FD{_zpl_escape(text)}^FS"
+	lines.append(f"^FO{margin},{y}{field}")
+	if bold:
+		lines.append(f"^FO{margin + 1},{y}{field}")
+	return y + line_gap
 
 
 _FO_X = re.compile(r"\^FO(\d+),")
@@ -351,6 +398,7 @@ def resolve_row(
 	price_list: str = "",
 	batch_no: str = "",
 	serial_no: str = "",
+	label_only: bool = False,
 ) -> "frappe._dict":
 	"""Fetch and validate everything needed to print one item row, mirroring
 	business rules 5.1/5.2: auto-fetch Item Name/Barcode/Barcode Type/UOM
@@ -414,7 +462,11 @@ def resolve_row(
 		source_row_name=source_row_name or "",
 	)
 
-	if not (row.barcode or "").strip():
+	if label_only:
+		# The Print Barcode page asked for a Label Only size. Keep the
+		# item text and skip barcode selection and validation.
+		pass
+	elif not (row.barcode or "").strip():
 		available = details.get("barcodes") or []
 		if len(available) > 1:
 			# resolve_row/get_item_barcode_details deliberately leave the
@@ -604,7 +656,7 @@ def get_quick_print_job(
 	sends this, unmodified, straight to QZ Tray or Zebra Browser Print -
 	no PDF, no print preview, no browser print dialog, and nothing is
 	saved as a document - this is a one-time-use print action."""
-	if size not in LABEL_SIZES:
+	if size not in PRINT_LABEL_CHOICES:
 		frappe.throw(_("Invalid label size '{0}'.").format(size))
 
 	if source_doctype and source_name:
@@ -666,6 +718,7 @@ def get_quick_print_job(
 				price_list,
 				batch_no,
 				serial_no,
+				label_only=is_label_only_choice(size),
 			)
 
 			label_zpl = build_label_zpl(row, settings, size)
@@ -673,8 +726,9 @@ def get_quick_print_job(
 			total_labels += row.no_of_barcodes
 			resolved_items.append(dict(row))
 
-	width_mm_field, height_mm_field = LABEL_SIZE_SETTINGS_FIELDS[size]
-	width_dots, height_dots = get_label_dimensions_dots(settings, size)
+	physical = physical_label_size(size)
+	width_mm_field, height_mm_field = LABEL_SIZE_SETTINGS_FIELDS[physical]
+	width_dots, height_dots = get_label_dimensions_dots(settings, physical)
 
 	return {
 		"zpl": combine_label_zpl(blocks, columns, width_dots, height_dots, gap_dots),
@@ -706,7 +760,7 @@ def log_print(
 	so success/failure is only knowable per batch here, not per individual
 	label within it - a "Failed" status means none of that row's requested
 	labels were confirmed printed."""
-	if size not in LABEL_SIZES:
+	if size not in PRINT_LABEL_CHOICES:
 		frappe.throw(_("Invalid label size '{0}'.").format(size))
 	if status not in ("Success", "Failed"):
 		frappe.throw(_("Invalid status '{0}'.").format(status))

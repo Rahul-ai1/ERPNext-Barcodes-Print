@@ -129,8 +129,8 @@ def get_available_serial_nos(item_code: str, batch_no: str = "") -> list:
 	)
 
 
-# Item Name, Item Code, and UOM already have their own Display Rule toggles.
-EXCLUDED_ITEM_FIELDS = {"item_name", "item_code", "stock_uom"}
+# Any Item value that can be printed as a single line of text. Layout,
+# buttons, images, and child tables are not in this set.
 PRINTABLE_ITEM_FIELDTYPES = {
 	"Data",
 	"Link",
@@ -143,21 +143,24 @@ PRINTABLE_ITEM_FIELDTYPES = {
 	"Time",
 	"Check",
 	"Percent",
+	"Text",
 	"Small Text",
+	"Long Text",
+	"Text Editor",
 	"Read Only",
 	"Phone",
 	"Dynamic Link",
 	"Duration",
+	"Barcode",
+	"Color",
 }
+TEXT_ITEM_FIELDTYPES = {"Text", "Small Text", "Long Text", "Text Editor"}
 
 
 def iter_item_master_fields():
-	"""Parent Item fields a label can print. Skips layout, tables, and the
-	three fields Display Rules already cover."""
+	"""Every parent Item field a label can print, in Item form order."""
 	meta = frappe.get_meta("Item")
 	for df in meta.fields:
-		if df.fieldname in EXCLUDED_ITEM_FIELDS:
-			continue
 		if df.fieldtype not in PRINTABLE_ITEM_FIELDTYPES:
 			continue
 		if df.get("is_virtual"):
@@ -191,7 +194,10 @@ def format_item_field_value(df, value) -> str:
 		return frappe.utils.formatdate(value)
 	if df.fieldtype == "Datetime":
 		return frappe.utils.format_datetime(value)
-	return str(value).strip()
+	text = str(value)
+	if df.fieldtype in TEXT_ITEM_FIELDTYPES:
+		text = frappe.utils.strip_html(text)
+	return " ".join(text.split())
 
 
 def get_item_master_values(item_code: str, fieldnames: list) -> dict:

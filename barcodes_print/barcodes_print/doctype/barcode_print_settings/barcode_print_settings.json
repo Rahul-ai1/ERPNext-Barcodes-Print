@@ -23,6 +23,7 @@
   "large_width_mm",
   "large_height_mm",
   "display_section",
+  "header_text",
   "display_rules",
   "item_display_fields",
   "pricing_section",
@@ -161,6 +162,12 @@
    "label": "Label Content (per size)"
   },
   {
+   "description": "Free text printed at the top of every label. Leave blank to print no header. Each line prints on its own row.",
+   "fieldname": "header_text",
+   "fieldtype": "Small Text",
+   "label": "Header"
+  },
+  {
    "description": "Small, Medium, and Large control labels that print a barcode. Small Label Only, Medium Label Only, and Large Label Only control the same sizes when the item has no barcode.",
    "fieldname": "display_rules",
    "fieldtype": "Table",
@@ -168,7 +175,7 @@
    "options": "Barcode Label Display Rule"
   },
   {
-   "description": "Add a field from Item master, then choose which label rows print it. Item Name, Item Code, and UOM stay on Display Rules.",
+   "description": "Every printable Item field is listed. Tick a size to print it, and edit Label to change the text shown before the value. New fields start unchecked. Item Name, Item Code, and UOM are also on Display Rules.",
    "fieldname": "item_display_fields",
    "fieldtype": "Table",
    "label": "Item Master Fields",
@@ -239,7 +246,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-16 22:40:00.000000",
+ "modified": "2026-10-16 23:10:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",

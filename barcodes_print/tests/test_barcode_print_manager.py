@@ -66,6 +66,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 		settings.number_of_columns = 1
 		settings.column_gap_mm = 0
 		settings.set("item_display_fields", [])
+		settings.header_text = ""
 		settings.save(ignore_permissions=True)
 
 	def _set_display_rule(self, settings_doc, size, **overrides):
@@ -310,31 +311,80 @@ class TestBarcodePrintManager(FrappeTestCase):
 		}).insert(ignore_permissions=True)
 
 		settings_doc = frappe.get_single("Barcode Print Settings")
-		settings_doc.append("item_display_fields", {
-			"item_field": "item_group",
-			"show_small": 1,
-			"show_medium": 0,
-			"show_large": 0,
-			"show_small_label_only": 0,
-			"show_medium_label_only": 1,
-			"show_large_label_only": 0,
-		})
+		fieldnames = {row.item_field for row in settings_doc.item_display_fields}
+		self.assertIn("item_name", fieldnames)
+		self.assertIn("item_code", fieldnames)
+		self.assertIn("stock_uom", fieldnames)
+		self.assertIn("description", fieldnames)
+		self.assertIn("item_group", fieldnames)
+		description = next(row for row in settings_doc.item_display_fields if row.item_field == "description")
+		self.assertEqual(int(description.show_small or 0), 0)
+
+		for row in settings_doc.item_display_fields:
+			if row.item_field != "item_group":
+				continue
+			row.field_label = "Category"
+			row.show_small = 1
+			row.show_medium = 0
+			row.show_large = 0
+			row.show_small_label_only = 0
+			row.show_medium_label_only = 1
+			row.show_large_label_only = 0
+			row.bold = 1
+			break
 		settings_doc.save(ignore_permissions=True)
+		settings_doc.reload()
+		saved = next(row for row in settings_doc.item_display_fields if row.item_field == "item_group")
+		self.assertEqual(saved.field_label, "Category")
+		self.assertEqual(int(saved.bold or 0), 1)
 
 		row = resolve_row(item_code, no_of_barcodes=1)
 		self.assertEqual(row.item_master_values.get("item_group"), "All Item Groups")
 
 		settings = get_barcode_print_settings()
 		small_zpl = build_label_zpl(row, settings, "Small")
-		self.assertIn("Item Group: All Item Groups", small_zpl)
+		self.assertEqual(small_zpl.count("Category: All Item Groups"), 2)
+		self.assertEqual(small_zpl.count("Field Label Item"), 1)
 
 		medium_zpl = build_label_zpl(row, settings, "Medium")
-		self.assertNotIn("Item Group:", medium_zpl)
+		self.assertNotIn("Category:", medium_zpl)
 
 		row.barcode = ""
 		label_only_zpl = build_label_zpl(row, settings, "Medium")
-		self.assertIn("Item Group: All Item Groups", label_only_zpl)
+		self.assertIn("Category: All Item Groups", label_only_zpl)
 		self.assertNotIn("^BY", label_only_zpl)
+
+	def test_header_text_prints_above_item_name(self):
+		"""A free-text header prints first, one ZPL row per line."""
+		item_code = self._create_test_item_with_barcode()
+		item_name = frappe.db.get_value("Item", item_code, "item_name")
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.header_text = "ACME STORES\nShelf A"
+		settings_doc.save(ignore_permissions=True)
+
+		job = get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Small")
+		zpl = job["zpl"]
+		self.assertLess(zpl.index("ACME STORES"), zpl.index("Shelf A"))
+		self.assertLess(zpl.index("Shelf A"), zpl.index(item_name))
+
+	def test_print_page_label_only_choice_skips_barcode(self):
+		"""Choosing Small Label Only on the print page uses that rule and
+		does not print a barcode, even when the item has one."""
+		item_code = self._create_test_item_with_barcode()
+		item_name = frappe.db.get_value("Item", item_code, "item_name")
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		self._set_display_rule(settings_doc, "Small", show_item_name=0)
+		self._set_display_rule(settings_doc, "Small Label Only", show_item_name=1)
+
+		job = get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Small Label Only")
+		self.assertNotIn("^BY", job["zpl"])
+		self.assertIn(item_name, job["zpl"])
+		self.assertEqual(float(job["label_width_mm"]), 50.0)
+		self.assertEqual(float(job["label_height_mm"]), 25.0)
+
+		barcode_job = get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Small")
+		self.assertIn("^BY", barcode_job["zpl"])
+		self.assertNotIn(item_name, barcode_job["zpl"])
 
 	def test_invalid_barcode_value_validation(self):
 		"""Test that invalid barcode values produce clear validation messages and are rejected."""
