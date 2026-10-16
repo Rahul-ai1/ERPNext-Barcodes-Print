@@ -5,16 +5,23 @@ import frappe
 from frappe.utils import cint
 
 
-def get_item_price(item_code: str, price_list: str):
-	"""Return this Item's rate in the given Price List, or None if no Item
-	Price row exists for that combination - the caller prints "N/A" on the
-	label rather than a silently wrong/zero rate."""
+def get_item_price(item_code: str, price_list: str) -> tuple:
+	"""Return (rate, currency) for this Item in the Price List.
+
+	rate is None when no Item Price row exists, so the label can print
+	"N/A" instead of a zero. currency comes from that row, then the Price List."""
 	if not item_code or not price_list:
-		return None
-	rate = frappe.db.get_value(
-		"Item Price", {"item_code": item_code, "price_list": price_list}, "price_list_rate"
+		return None, ""
+	row = frappe.db.get_value(
+		"Item Price",
+		{"item_code": item_code, "price_list": price_list},
+		["price_list_rate", "currency"],
+		as_dict=True,
 	)
-	return rate
+	if not row:
+		return None, ""
+	currency = row.currency or frappe.db.get_value("Price List", price_list, "currency") or ""
+	return row.price_list_rate, currency
 
 
 @frappe.whitelist()
@@ -36,7 +43,8 @@ def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str 
 		# misleading "0.00". Only ever resolved from the given Price List's
 		# own Item Price row - never Item.standard_rate, which isn't
 		# necessarily the rate anyone actually sells/buys at.
-		"rate": get_item_price(item_code, price_list) if price_list else None,
+		"rate": None,
+		"currency": "",
 		"item_group": item.item_group or "",
 		"brand": item.brand or "",
 		"description": item.description or "",
@@ -47,6 +55,8 @@ def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str 
 		# offer the user an explicit choice instead of silently guessing.
 		"barcodes": [],
 	}
+	if price_list:
+		details["rate"], details["currency"] = get_item_price(item_code, price_list)
 
 	# Check child barcodes table first (Item Master -> Barcodes table)
 	barcodes = getattr(item, "barcodes", []) or []

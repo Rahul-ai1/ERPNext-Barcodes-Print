@@ -211,7 +211,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 	# as soon as more than 2-3 toggles are enabled together).
 	text_lines_before = _header_lines(settings)
 	if rules["show_item_name"] and row.item_name:
-		text_lines_before.append(row.item_name)
+		text_lines_before.append({"text": row.item_name, "bold": True, "emphasis": True})
 	if rules["show_item_code"] and row.item:
 		text_lines_before.append(row.item)
 
@@ -226,15 +226,11 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		text_lines_after.append(_("Serial: {0}").format(row.serial_no))
 	if rules["show_uom"] and row.uom:
 		text_lines_after.append(f"UOM: {row.uom}")
-	if rules["show_rate"]:
-		# row.rate is None when no Item Price was found for the resolved
-		# Price List (or none was configured at all) - printed as "N/A"
-		# rather than silently showing "0.00" or skipping the line.
-		amount = frappe.utils.fmt_money(row.rate) if row.rate is not None else _("N/A")
-		text_lines_after.append(_("MRP: {0}").format(amount))
 	text_lines_after.extend(_item_master_lines(row, settings, rule_key))
-
-	n_lines = len(text_lines_before) + len(text_lines_after)
+	if rules["show_rate"]:
+		# Last line on the label. None means no Item Price was found, so
+		# the line is "N/A" rather than a silent 0.00.
+		text_lines_after.append(_("MRP: {0}").format(_format_mrp(row)))
 
 	# Text height AND barcode bar width both scale with the chosen label
 	# size - using a fixed module width/margin regardless of size was the
@@ -245,7 +241,11 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 	module_width_mm = {"Small": 0.25, "Medium": 0.4, "Large": 0.5}[physical]
 	text_h = mm_to_dots(text_height_mm, settings["printer_dpi"])
 	module_width_dots = mm_to_dots(module_width_mm, settings["printer_dpi"])
-	line_gap = text_h + _line_spacing_dots(settings)
+	line_spacing = _line_spacing_dots(settings)
+	text_block = sum(
+		_line_font_height(entry, text_h) + line_spacing
+		for entry in text_lines_before + text_lines_after
+	)
 	margin = mm_to_dots(1.5, settings["printer_dpi"])
 	barcode_gap = mm_to_dots(1.5, settings["printer_dpi"])
 	min_barcode_height = mm_to_dots(6.0, settings["printer_dpi"])
@@ -254,7 +254,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 	if has_barcode:
 		barcode_height_dots = max(
 			min_barcode_height,
-			height_dots - (2 * margin) - (n_lines * line_gap) - barcode_gap,
+			height_dots - (2 * margin) - text_block - barcode_gap,
 		)
 		if resolved_fmt in MATRIX_FORMATS:
 			barcode_height_mm = barcode_height_dots * 25.4 / settings["printer_dpi"]
@@ -277,7 +277,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		# ^FB (Field Block) gives text fields native justification within
 		# a width - no barcode does, so the barcode below is positioned
 		# manually further down using an estimated rendered width instead.
-		y = _append_text_line(lines, text, y, margin, available_width, fb_justify, text_h, line_gap)
+		y = _append_text_line(lines, text, y, margin, available_width, fb_justify, text_h, line_spacing)
 
 	if has_barcode:
 		barcode_width_dots = _estimate_barcode_width_dots(resolved_fmt, row.barcode, barcode_height_dots, module_width_dots)
@@ -288,10 +288,24 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		y += barcode_height_dots + barcode_gap
 
 	for text in text_lines_after:
-		y = _append_text_line(lines, text, y, margin, available_width, fb_justify, text_h, line_gap)
+		y = _append_text_line(lines, text, y, margin, available_width, fb_justify, text_h, line_spacing)
 
 	lines.append("^XZ")
 	return "\n".join(lines)
+
+
+def _format_mrp(row) -> str:
+	"""Price with the currency symbol, then the tax note. No Item Price prints N/A."""
+	if row.rate is None:
+		return _("N/A")
+	currency = getattr(row, "currency", None) or frappe.defaults.get_global_default("currency") or ""
+	amount = frappe.utils.fmt_money(row.rate, currency=currency or None)
+	if currency and frappe.defaults.get_global_default("hide_currency_symbol") == "Yes":
+		symbol = frappe.db.get_value("Currency", currency, "symbol", cache=True) or currency
+		if symbol not in amount:
+			on_right = frappe.db.get_value("Currency", currency, "symbol_on_right", cache=True)
+			amount = f"{amount} {symbol}" if on_right else f"{symbol} {amount}"
+	return _("{0} (Inclusive of all taxes)").format(amount)
 
 
 def _line_spacing_dots(settings: dict) -> int:
@@ -307,7 +321,7 @@ def _header_lines(settings: dict) -> list:
 	header = (settings.get("header_text") or "").strip()
 	justify = {"Left": "L", "Center": "C", "Right": "R"}.get(settings.get("header_alignment") or "Left", "L")
 	return [
-		{"text": line.strip(), "justify": justify}
+		{"text": line.strip(), "justify": justify, "bold": True, "emphasis": True}
 		for line in header.splitlines()
 		if line.strip()
 	]
@@ -329,7 +343,18 @@ def _item_master_lines(row, settings: dict, rule_key: str) -> list:
 	return lines
 
 
-def _append_text_line(lines, entry, y, margin, available_width, fb_justify, text_h, line_gap):
+def _emphasis_height(text_h: int) -> int:
+	"""Header and item name are one step larger than the other lines."""
+	return max(text_h + 2, round(text_h * 1.25))
+
+
+def _line_font_height(entry, text_h: int) -> int:
+	if isinstance(entry, dict) and entry.get("emphasis"):
+		return _emphasis_height(text_h)
+	return text_h
+
+
+def _append_text_line(lines, entry, y, margin, available_width, fb_justify, text_h, line_spacing):
 	"""Print one text row. Font 0 has no bold face, so Bold reprints the
 	same text one dot to the right and the strokes look heavier."""
 	if isinstance(entry, dict):
@@ -339,11 +364,12 @@ def _append_text_line(lines, entry, y, margin, available_width, fb_justify, text
 	else:
 		text = entry
 		bold = False
-	field = f"^FB{available_width},1,0,{fb_justify}^A0N,{text_h},{text_h}^FD{_zpl_escape(text)}^FS"
+	font_h = _line_font_height(entry, text_h)
+	field = f"^FB{available_width},1,0,{fb_justify}^A0N,{font_h},{font_h}^FD{_zpl_escape(text)}^FS"
 	lines.append(f"^FO{margin},{y}{field}")
 	if bold:
 		lines.append(f"^FO{margin + 1},{y}{field}")
-	return y + line_gap
+	return y + font_h + line_spacing
 
 
 _FO_X = re.compile(r"\^FO(\d+),")
@@ -478,6 +504,7 @@ def resolve_row(
 		# none was configured) - build_label_zpl prints "N/A" for that,
 		# never a silent 0.00.
 		rate=details.get("rate"),
+		currency=details.get("currency") or "",
 		price_list=price_list or "",
 		barcode=barcode or details.get("barcode") or "",
 		barcode_type=barcode_type or details.get("barcode_type") or "",

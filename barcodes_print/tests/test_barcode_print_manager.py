@@ -9,6 +9,7 @@ from frappe.tests.utils import FrappeTestCase
 from barcodes_print.api.barcode import get_barcode_print_settings, validate_barcode_compatibility
 from barcodes_print.api.item import get_item_barcode_details
 from barcodes_print.api.zpl import (
+	_format_mrp,
 	build_label_zpl,
 	get_label_dimensions_dots,
 	get_purchase_document_items,
@@ -18,6 +19,13 @@ from barcodes_print.api.zpl import (
 	mm_to_dots,
 	resolve_row,
 )
+
+
+def _font_height(line: str) -> int:
+	match = re.search(r"\^A0N,(\d+),", line)
+	if not match:
+		raise AssertionError(f"no font height in {line}")
+	return int(match.group(1))
 
 
 def _text_row_y(zpl: str, text: str) -> int:
@@ -345,7 +353,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 		settings = get_barcode_print_settings()
 		small_zpl = build_label_zpl(row, settings, "Small")
 		self.assertEqual(small_zpl.count("Category: All Item Groups"), 2)
-		self.assertEqual(small_zpl.count("Field Label Item"), 1)
+		self.assertEqual(small_zpl.count("Field Label Item"), 2)
 
 		medium_zpl = build_label_zpl(row, settings, "Medium")
 		self.assertNotIn("Category:", medium_zpl)
@@ -384,6 +392,11 @@ class TestBarcodePrintManager(FrappeTestCase):
 		name_line = next(line for line in zpl.splitlines() if item_name in line)
 		self.assertIn(",0,C^A0", header_line)
 		self.assertIn(",0,L^A0", name_line)
+		self.assertEqual(zpl.count("ACME STORES"), 2)
+		self.assertEqual(zpl.count(item_name), 2)
+		code_line = next(line for line in zpl.splitlines() if item_code in line and "^A0N" in line)
+		self.assertGreater(_font_height(header_line), _font_height(code_line))
+		self.assertGreater(_font_height(name_line), _font_height(code_line))
 
 	def test_line_spacing_increases_the_gap_between_text_rows(self):
 		"""Line Spacing is the extra millimetres between one text row and the next."""
@@ -698,16 +711,24 @@ class TestBarcodePrintManager(FrappeTestCase):
 		"""The price line on the label is captioned MRP."""
 		settings = get_barcode_print_settings()
 		settings["display_rules"]["Small"]["show_rate"] = 1
+		currency = frappe.defaults.get_global_default("currency")
 		row = frappe._dict(
 			idx=1, item="ITEM-X", item_name="Item X",
-			barcode="ABC123", barcode_type="CODE-39", uom="Nos", rate=150,
+			barcode="ABC123", barcode_type="CODE-39", uom="Nos", rate=150, currency=currency,
 		)
 		zpl = build_label_zpl(row, settings, "Small")
-		self.assertIn(f"MRP: {frappe.utils.fmt_money(150)}", zpl)
+		self.assertIn(f"MRP: {_format_mrp(row)}", zpl)
+		symbol = frappe.db.get_value("Currency", currency, "symbol") or currency
+		self.assertIn(symbol, zpl)
+		self.assertIn("(Inclusive of all taxes)", zpl)
+		self.assertLess(zpl.index("UOM:"), zpl.index("MRP:"))
+		last_text = [line for line in zpl.splitlines() if "^FD" in line][-1]
+		self.assertIn("MRP:", last_text)
 
 		row.rate = None
 		missing = build_label_zpl(row, settings, "Small")
 		self.assertIn("MRP: N/A", missing)
+		self.assertNotIn("MRP: N/A (Inclusive of all taxes)", missing)
 
 	def test_alignment_left_starts_at_the_margin(self):
 		settings = get_barcode_print_settings()
