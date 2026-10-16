@@ -208,6 +208,7 @@ def get_barcode_print_settings() -> dict:
 		"unlimited_reprints": cint(settings.get("unlimited_reprints")),
 		"default_price_list": settings.get("default_price_list") or "",
 		"header_text": (settings.get("header_text") or "").strip(),
+		"header_alignment": settings.get("header_alignment") or "Left",
 		"item_fields": item_fields,
 	}
 

@@ -229,7 +229,8 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		# row.rate is None when no Item Price was found for the resolved
 		# Price List (or none was configured at all) - printed as "N/A"
 		# rather than silently showing "0.00" or skipping the line.
-		text_lines_after.append(frappe.utils.fmt_money(row.rate) if row.rate is not None else _("N/A"))
+		amount = frappe.utils.fmt_money(row.rate) if row.rate is not None else _("N/A")
+		text_lines_after.append(_("MRP: {0}").format(amount))
 	text_lines_after.extend(_item_master_lines(row, settings, rule_key))
 
 	n_lines = len(text_lines_before) + len(text_lines_after)
@@ -293,9 +294,15 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 
 
 def _header_lines(settings: dict) -> list:
-	"""Free-text header from Barcode Print Settings, one printed row per line."""
+	"""Free-text header from Barcode Print Settings, one printed row per line.
+	Header alignment is separate from the Display Rule alignment."""
 	header = (settings.get("header_text") or "").strip()
-	return [line.strip() for line in header.splitlines() if line.strip()]
+	justify = {"Left": "L", "Center": "C", "Right": "R"}.get(settings.get("header_alignment") or "Left", "L")
+	return [
+		{"text": line.strip(), "justify": justify}
+		for line in header.splitlines()
+		if line.strip()
+	]
 
 
 def _item_master_lines(row, settings: dict, rule_key: str) -> list:
@@ -320,6 +327,7 @@ def _append_text_line(lines, entry, y, margin, available_width, fb_justify, text
 	if isinstance(entry, dict):
 		text = entry.get("text") or ""
 		bold = bool(entry.get("bold"))
+		fb_justify = entry.get("justify") or fb_justify
 	else:
 		text = entry
 		bold = False

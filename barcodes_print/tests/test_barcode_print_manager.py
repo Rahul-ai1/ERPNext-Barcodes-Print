@@ -67,6 +67,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 		settings.column_gap_mm = 0
 		settings.set("item_display_fields", [])
 		settings.header_text = ""
+		settings.header_alignment = "Left"
 		settings.save(ignore_permissions=True)
 
 	def _set_display_rule(self, settings_doc, size, **overrides):
@@ -372,12 +373,17 @@ class TestBarcodePrintManager(FrappeTestCase):
 		item_name = frappe.db.get_value("Item", item_code, "item_name")
 		settings_doc = frappe.get_single("Barcode Print Settings")
 		settings_doc.header_text = "ACME STORES\nShelf A"
+		settings_doc.header_alignment = "Center"
 		settings_doc.save(ignore_permissions=True)
 
 		job = get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Small")
 		zpl = job["zpl"]
 		self.assertLess(zpl.index("ACME STORES"), zpl.index("Shelf A"))
 		self.assertLess(zpl.index("Shelf A"), zpl.index(item_name))
+		header_line = next(line for line in zpl.splitlines() if "ACME STORES" in line)
+		name_line = next(line for line in zpl.splitlines() if item_name in line)
+		self.assertIn(",0,C^A0", header_line)
+		self.assertIn(",0,L^A0", name_line)
 
 	def test_print_page_label_only_choice_skips_barcode(self):
 		"""Choosing Small Label Only on the print page uses that rule and
@@ -667,6 +673,21 @@ class TestBarcodePrintManager(FrappeTestCase):
 		)
 		zpl = build_label_zpl(row, settings, "Large")
 		self.assertIn("^BQ", zpl)
+
+	def test_rate_prints_with_mrp_label(self):
+		"""The price line on the label is captioned MRP."""
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Small"]["show_rate"] = 1
+		row = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X",
+			barcode="ABC123", barcode_type="CODE-39", uom="Nos", rate=150,
+		)
+		zpl = build_label_zpl(row, settings, "Small")
+		self.assertIn(f"MRP: {frappe.utils.fmt_money(150)}", zpl)
+
+		row.rate = None
+		missing = build_label_zpl(row, settings, "Small")
+		self.assertIn("MRP: N/A", missing)
 
 	def test_alignment_left_starts_at_the_margin(self):
 		settings = get_barcode_print_settings()

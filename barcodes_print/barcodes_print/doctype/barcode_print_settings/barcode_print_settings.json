@@ -24,6 +24,7 @@
   "large_height_mm",
   "display_section",
   "header_text",
+  "header_alignment",
   "display_rules",
   "item_display_fields",
   "pricing_section",
@@ -169,6 +170,14 @@
    "label": "Header"
   },
   {
+   "default": "Left",
+   "description": "Alignment of the header only. Item lines still follow the Display Rule alignment for the chosen size.",
+   "fieldname": "header_alignment",
+   "fieldtype": "Select",
+   "label": "Header Alignment",
+   "options": "Left\nCenter\nRight"
+  },
+  {
    "description": "Small, Medium, and Large control labels that print a barcode. Small Label Only, Medium Label Only, and Large Label Only control the same sizes when the item has no barcode.",
    "fieldname": "display_rules",
    "fieldtype": "Table",
@@ -188,7 +197,7 @@
    "label": "Pricing"
   },
   {
-   "description": "Used to auto-fetch each item's rate on the Print Barcode page whenever a label size's Display Rules show Rate. Can be overridden per row at print time. If no price is found for an item in the chosen Price List, the label prints \"N/A\" instead of a rate.",
+   "description": "Used to auto-fetch each item's price on the Print Barcode page whenever a label size's Display Rules show MRP. Can be overridden per row at print time. The label prints \"MRP:\" plus the amount, or \"MRP: N/A\" when no price is found.",
    "fieldname": "default_price_list",
    "fieldtype": "Link",
    "label": "Default Price List",
@@ -247,7 +256,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-16 23:32:00.000000",
+ "modified": "2026-10-17 00:12:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",
