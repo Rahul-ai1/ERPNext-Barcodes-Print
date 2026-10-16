@@ -26,6 +26,7 @@ from frappe import _
 from barcodes_print.api.barcode import (
 	LABEL_ONLY_BY_SIZE,
 	MATRIX_FORMATS,
+	_line_spacing_mm,
 	get_barcode_print_settings,
 	get_display_barcode_type,
 	validate_barcode_compatibility,
@@ -244,7 +245,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 	module_width_mm = {"Small": 0.25, "Medium": 0.4, "Large": 0.5}[physical]
 	text_h = mm_to_dots(text_height_mm, settings["printer_dpi"])
 	module_width_dots = mm_to_dots(module_width_mm, settings["printer_dpi"])
-	line_gap = text_h + mm_to_dots(0.6, settings["printer_dpi"])
+	line_gap = text_h + _line_spacing_dots(settings)
 	margin = mm_to_dots(1.5, settings["printer_dpi"])
 	barcode_gap = mm_to_dots(1.5, settings["printer_dpi"])
 	min_barcode_height = mm_to_dots(6.0, settings["printer_dpi"])
@@ -291,6 +292,13 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 
 	lines.append("^XZ")
 	return "\n".join(lines)
+
+
+def _line_spacing_dots(settings: dict) -> int:
+	"""Extra gap between text rows. An unset value keeps the previous 0.6mm."""
+	spacing_mm = _line_spacing_mm(settings.get("line_spacing_mm"))
+	dpi = settings["printer_dpi"]
+	return max(0, round(spacing_mm * dpi / 25.4))
 
 
 def _header_lines(settings: dict) -> list:

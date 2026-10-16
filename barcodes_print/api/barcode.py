@@ -110,6 +110,13 @@ CANONICAL_DISPLAY_RULES = (
 )
 
 
+def _line_spacing_mm(value) -> float:
+	"""Unset line spacing keeps the previous fixed 0.6mm gap. Zero is allowed."""
+	if value in (None, ""):
+		return 0.6
+	return flt(value)
+
+
 def display_rule_key(label_size: str) -> str | None:
 	"""Return the settings key for one Display Rule row, or None if unknown."""
 	if label_size in CANONICAL_DISPLAY_RULES:
@@ -209,6 +216,7 @@ def get_barcode_print_settings() -> dict:
 		"default_price_list": settings.get("default_price_list") or "",
 		"header_text": (settings.get("header_text") or "").strip(),
 		"header_alignment": settings.get("header_alignment") or "Left",
+		"line_spacing_mm": _line_spacing_mm(settings.get("line_spacing_mm")),
 		"item_fields": item_fields,
 	}
 

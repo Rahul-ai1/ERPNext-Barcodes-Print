@@ -23,6 +23,7 @@
   "large_width_mm",
   "large_height_mm",
   "display_section",
+  "line_spacing_mm",
   "header_text",
   "header_alignment",
   "display_rules",
@@ -164,6 +165,14 @@
    "label": "Label Content (per size)"
   },
   {
+   "default": "0.6",
+   "description": "Extra blank space between text lines, in millimetres. 0 prints the next line immediately under the previous one.",
+   "fieldname": "line_spacing_mm",
+   "fieldtype": "Float",
+   "label": "Line Spacing (mm)",
+   "non_negative": 1
+  },
+  {
    "description": "Free text printed at the top of every label. Leave blank to print no header. Each line prints on its own row.",
    "fieldname": "header_text",
    "fieldtype": "Small Text",
@@ -256,7 +265,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-17 00:12:00.000000",
+ "modified": "2026-10-17 01:05:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",

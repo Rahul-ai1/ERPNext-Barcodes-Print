@@ -75,6 +75,8 @@ def seed_barcode_print_settings():
 			doc.number_of_columns = 1
 		if frappe.utils.flt(doc.column_gap_mm) < 0:
 			doc.column_gap_mm = 0
+		if doc.get("line_spacing_mm") in (None, ""):
+			doc.line_spacing_mm = 0.6
 		doc.save(ignore_permissions=True)
 
 

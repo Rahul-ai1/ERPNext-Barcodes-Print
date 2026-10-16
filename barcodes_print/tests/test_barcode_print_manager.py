@@ -20,6 +20,14 @@ from barcodes_print.api.zpl import (
 )
 
 
+def _text_row_y(zpl: str, text: str) -> int:
+	"""Y origin of the ZPL field that prints this text."""
+	for line in zpl.splitlines():
+		if text in line and line.startswith("^FO"):
+			return int(line.split(",")[1].split("^")[0])
+	raise AssertionError(f"{text} was not printed")
+
+
 def _random_ean13() -> str:
 	"""Generate a unique valid 12-digit base and calculate the EAN-13 checksum."""
 	digits = [random.randint(0, 9) for _ in range(12)]
@@ -68,6 +76,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 		settings.set("item_display_fields", [])
 		settings.header_text = ""
 		settings.header_alignment = "Left"
+		settings.line_spacing_mm = 0.6
 		settings.save(ignore_permissions=True)
 
 	def _set_display_rule(self, settings_doc, size, **overrides):
@@ -384,6 +393,26 @@ class TestBarcodePrintManager(FrappeTestCase):
 		name_line = next(line for line in zpl.splitlines() if item_name in line)
 		self.assertIn(",0,C^A0", header_line)
 		self.assertIn(",0,L^A0", name_line)
+
+	def test_line_spacing_increases_the_gap_between_text_rows(self):
+		"""Line Spacing is the extra millimetres between one text row and the next."""
+		item_code = self._create_test_item_with_barcode()
+		item_name = frappe.db.get_value("Item", item_code, "item_name")
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.header_text = "ACME"
+		settings_doc.line_spacing_mm = 0.6
+		settings_doc.save(ignore_permissions=True)
+		tight_y = _text_row_y(get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Small")["zpl"], item_name)
+
+		settings_doc.line_spacing_mm = 3
+		settings_doc.save(ignore_permissions=True)
+		loose_y = _text_row_y(get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Small")["zpl"], item_name)
+		self.assertGreater(loose_y - tight_y, mm_to_dots(2, 203) - mm_to_dots(0.6, 203) - 1)
+
+	def test_line_spacing_cannot_be_negative(self):
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.line_spacing_mm = -1
+		self.assertRaises(frappe.ValidationError, settings_doc.save)
 
 	def test_print_page_label_only_choice_skips_barcode(self):
 		"""Choosing Small Label Only on the print page uses that rule and
