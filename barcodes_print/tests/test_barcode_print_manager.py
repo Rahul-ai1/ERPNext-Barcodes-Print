@@ -786,6 +786,23 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertIn("MRP: N/A", missing)
 		self.assertNotIn("MRP: N/A (Inclusive of all taxes)", missing)
 
+	def test_text_wider_than_the_label_is_cut_instead_of_wrapping(self):
+		"""A line longer than the label is cut. The printer would otherwise print the tail over the start."""
+		settings = get_barcode_print_settings()
+		settings["item_name_character_limit"] = 0
+		settings["display_rules"]["Small"]["show_item_name"] = 1
+		settings["display_rules"]["Small"]["show_item_code"] = 0
+		settings["display_rules"]["Small"]["show_rate"] = 0
+		name = "SCHEWEPPS GINGER ALE CAN 320ML"
+		row = frappe._dict(
+			idx=1, item="ITEM", item_name=name,
+			barcode="ABC123", barcode_type="CODE-39", uom="Nos", rate=None,
+		)
+		zpl = build_label_zpl(row, settings, "Small")
+		self.assertIn("SCHEWEPPS GINGER ALE CAN", zpl)
+		self.assertNotIn(name, zpl)
+		self.assertNotIn("320ML", zpl)
+
 	def test_rupee_symbol_is_drawn_because_font_0_has_no_glyph(self):
 		"""The printer's built-in font cannot draw ₹, so the label paints the sign."""
 		settings = get_barcode_print_settings()

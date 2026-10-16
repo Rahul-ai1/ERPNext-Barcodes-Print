@@ -393,6 +393,9 @@ def _append_text_line(lines, entry, y, margin, available_width, fb_justify, text
 		text = entry
 		bold = False
 	font_h = _line_font_height(entry, text_h)
+	# ^FB wraps text that does not fit, and a one-line field then prints that
+	# tail back over the start of the same line. Cut it off first.
+	text = _fit_text_to_width(text, font_h, available_width)
 	if any(sign in text for sign in _RUPEE_SIGNS):
 		return _append_rupee_line(lines, text, y, margin, available_width, fb_justify, font_h, line_spacing, bold)
 	field = f"^FB{available_width},1,0,{fb_justify}^A0N,{font_h},{font_h}^FD{_zpl_escape(text)}^FS"
@@ -471,13 +474,28 @@ def _rupee_graphic(font_h: int) -> tuple[int, int, str]:
 	return len(_RUPEE_ROWS[0]) * scale, len(pixels), f"^GFA,{total},{total},{bytes_per_row},{hex_data}"
 
 
+def _fit_text_to_width(text: str, font_h: int, max_width: int) -> str:
+	"""Keep only the characters that fit on one row of this label."""
+	if not text or max_width <= 0:
+		return ""
+	if _font0_text_width(text, font_h) <= max_width:
+		return text
+	kept = []
+	for char in text:
+		trial = "".join(kept) + char
+		if _font0_text_width(trial, font_h) > max_width:
+			break
+		kept.append(char)
+	return "".join(kept).rstrip()
+
+
 def _font0_text_width(text: str, font_h: int) -> int:
 	"""Approximate Font 0 width so the rupee picture sits next to the amount."""
 	width = 0.0
 	for char in text:
 		if char == " ":
 			factor = 0.33
-		elif char in ".,:;!'|":
+		elif char in ".,:;!'|()":
 			factor = 0.28
 		elif char in "ilI1":
 			factor = 0.35
