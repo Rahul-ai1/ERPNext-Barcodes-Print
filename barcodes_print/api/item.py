@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import frappe
+from frappe import _
 from frappe.utils import cint
 
 
@@ -100,6 +101,44 @@ def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str 
 		]
 
 	# If barcode is not in Item Master, leave blank ("")
+	return details
+
+
+@frappe.whitelist()
+def resolve_scan(search_value: str, price_list: str = "") -> dict:
+	"""Resolve one scanner value into the fields for a Print Barcode row.
+
+	Uses the same lookup as ERPNext stock documents: Item Barcode, then
+	Serial No, then Batch. Item Code is the fallback. A warehouse name is
+	not an item, so it resolves to nothing here.
+	"""
+	search_value = (search_value or "").strip()
+	if not search_value:
+		return {}
+
+	from erpnext.stock.utils import scan_barcode
+
+	scan = scan_barcode(search_value) or {}
+	if scan.get("warehouse") and not scan.get("item_code"):
+		return {}
+
+	item_code = scan.get("item_code")
+	if not item_code and frappe.db.exists("Item", search_value):
+		item_code = search_value
+	if not item_code or not frappe.db.exists("Item", item_code):
+		return {}
+	if cint(frappe.db.get_value("Item", item_code, "disabled")):
+		frappe.throw(_("Item {0} is disabled.").format(item_code))
+
+	scanned_barcode = (scan.get("barcode") or "").strip()
+	details = get_item_barcode_details(item_code, barcode=scanned_barcode, price_list=price_list or "")
+	details["item"] = item_code
+	details["batch_no"] = scan.get("batch_no") or ""
+	details["serial_no"] = scan.get("serial_no") or ""
+	if scanned_barcode:
+		details["barcode"] = scanned_barcode
+	if scan.get("uom"):
+		details["uom"] = scan.get("uom")
 	return details
 
 

@@ -276,6 +276,166 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 	];
 };
 
+// A handheld scanner types the code and sends Enter. Queue scans so a
+// second beep that arrives before the first lookup returns is not dropped.
+barcodes_print.print_barcode_page.add_scanned_item = function (search_value) {
+	const state = barcodes_print.print_barcode_page._state;
+	if (!state) return;
+	state._scan_queue = state._scan_queue || [];
+	state._scan_queue.push(search_value);
+	barcodes_print.print_barcode_page._drain_scan_queue();
+};
+
+barcodes_print.print_barcode_page._drain_scan_queue = function () {
+	const state = barcodes_print.print_barcode_page._state;
+	if (!state || state._scan_busy) return;
+	const search_value = (state._scan_queue || []).shift();
+	if (!search_value) return;
+
+	state._scan_busy = true;
+	frappe
+		.call({
+			method: "barcodes_print.api.item.resolve_scan",
+			args: {
+				search_value,
+				price_list: state.default_price_list || "",
+			},
+		})
+		.then((r) => {
+			const data = r.message || {};
+			if (!data.item) {
+				frappe.show_alert({
+					message: __("No item found for {0}.", [search_value]),
+					indicator: "red",
+				});
+				return;
+			}
+			const prompted = barcodes_print.print_barcode_page._apply_scan(data);
+			if (!prompted && state.scan_control) {
+				state.scan_control.$input.focus();
+			}
+		})
+		.then(release_scan, release_scan);
+
+	function release_scan() {
+		state._scan_busy = false;
+		barcodes_print.print_barcode_page._drain_scan_queue();
+	}
+};
+
+barcodes_print.print_barcode_page._apply_scan = function (data) {
+	const state = barcodes_print.print_barcode_page._state;
+	const grid = state.items_control.grid;
+
+	if (data.serial_no && barcodes_print.print_barcode_page._serial_already_listed(data.serial_no)) {
+		frappe.show_alert({
+			message: __("{0} is already in the list.", [data.serial_no]),
+			indicator: "orange",
+		});
+		return false;
+	}
+
+	const existing = barcodes_print.print_barcode_page._find_scan_row(data);
+	if (existing) {
+		if (data.serial_no) {
+			const serials = (existing.doc.serial_nos || "").split("\n").filter(Boolean);
+			serials.push(data.serial_no);
+			existing.doc.serial_nos = serials.join("\n");
+			existing.refresh_field("serial_nos");
+		} else if (!barcodes_print.print_barcode_page._bump_scan_qty(existing)) {
+			return false;
+		}
+		barcodes_print.print_barcode_page.update_total();
+		frappe.show_alert({
+			message: __("Updated {0}.", [data.item_name || data.item]),
+			indicator: "green",
+		});
+		return false;
+	}
+
+	const row = barcodes_print.print_barcode_page._fill_scan_row(grid, data);
+	barcodes_print.print_barcode_page.update_total();
+	frappe.show_alert({
+		message: __("Added {0}.", [data.item_name || data.item]),
+		indicator: "green",
+	});
+
+	const choices = data.barcodes || [];
+	let prompted = false;
+	if (!data.barcode && choices.length > 1) {
+		barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
+		prompted = true;
+	}
+	if (data.has_serial_no && !data.serial_no) {
+		barcodes_print.print_barcode_page.prompt_serial_no_choice(row, data.item, data.batch_no || "");
+		prompted = true;
+	}
+	return prompted;
+};
+
+barcodes_print.print_barcode_page._find_scan_row = function (data) {
+	const grid = barcodes_print.print_barcode_page._state.items_control.grid;
+	return (grid.grid_rows || []).find((row) => {
+		if ((row.doc.item || "") !== data.item) return false;
+		if ((row.doc.batch_no || "") !== (data.batch_no || "")) return false;
+		if (data.serial_no) return true;
+		return (row.doc.barcode || "") === (data.barcode || "");
+	});
+};
+
+barcodes_print.print_barcode_page._serial_already_listed = function (serial_no) {
+	const grid = barcodes_print.print_barcode_page._state.items_control.grid;
+	return (grid.grid_rows || []).some((row) =>
+		(row.doc.serial_nos || "").split("\n").filter(Boolean).includes(serial_no)
+	);
+};
+
+barcodes_print.print_barcode_page._bump_scan_qty = function (row) {
+	const max_allowed = cint(row.doc.max_allowed);
+	const next = cint(row.doc.no_of_barcodes) + 1;
+	if (max_allowed && next > max_allowed) {
+		frappe.show_alert({
+			message: __("This line cannot have more than {0} label(s).", [max_allowed]),
+			indicator: "orange",
+		});
+		return false;
+	}
+	row.doc.no_of_barcodes = next;
+	row.refresh_field("no_of_barcodes");
+	return true;
+};
+
+barcodes_print.print_barcode_page._fill_scan_row = function (grid, data) {
+	const state = barcodes_print.print_barcode_page._state;
+	grid.add_new_row();
+	const row = grid.grid_rows[grid.grid_rows.length - 1];
+	row.doc.item = data.item;
+	row.doc.item_name = data.item_name || "";
+	row.doc.uom = data.uom || "";
+	row.doc.barcode = data.barcode || "";
+	row.doc.barcode_type = data.barcode_type || "";
+	row.doc.rate = data.rate;
+	row.doc.batch_no = data.batch_no || "";
+	row.doc.serial_nos = data.serial_no || "";
+	row.doc.no_of_barcodes = 1;
+	row.doc.price_list = state.default_price_list || "";
+	row.doc._has_batch_no = data.has_batch_no;
+	row.doc._has_serial_no = data.has_serial_no;
+	[
+		"item",
+		"item_name",
+		"uom",
+		"barcode",
+		"barcode_type",
+		"rate",
+		"batch_no",
+		"serial_nos",
+		"no_of_barcodes",
+		"price_list",
+	].forEach((fieldname) => row.refresh_field(fieldname));
+	return row;
+};
+
 barcodes_print.print_barcode_page.render = function (page) {
 	page.main.empty();
 
@@ -286,9 +446,12 @@ barcodes_print.print_barcode_page.render = function (page) {
 	const $source_banner = $("<div>").appendTo($wrapper);
 
 	$(`<p class="text-muted">${__(
-		"Add items below, choose a label size and how many columns, and print directly to your label printer. Label Only sizes print the same label with no barcode. Nothing here is saved as a document - each print is a one-time action."
+		"Scan a barcode, serial, batch, or item code, or add rows below. Choose a label size and how many columns, then print directly to your label printer. Label Only sizes print the same label with no barcode. Nothing here is saved as a document - each print is a one-time action."
 	)}</p>`).appendTo($wrapper);
 
+	const $scan_area = $('<div class="print-barcode-scan" style="margin-bottom: 15px; max-width: 480px;">').appendTo(
+		$wrapper
+	);
 	const $items_area = $('<div style="margin-bottom: 10px;">').appendTo($wrapper);
 	const $total_area = $('<div class="text-muted" style="margin-bottom: 20px; font-size: 13px;">').appendTo($wrapper);
 	const $options_row = $('<div class="row">').appendTo($wrapper);
@@ -323,6 +486,42 @@ barcodes_print.print_barcode_page.render = function (page) {
 			render_input: true,
 		});
 		items_control.refresh();
+
+		const submit_scan = () => {
+			const value = cstr(scan_control.get_value()).trim();
+			// Clear the input directly. set_value() would run this field's
+			// onchange again and can wipe the next scan if it resolves late.
+			scan_control.$input.val("");
+			if (!value) {
+				return;
+			}
+			barcodes_print.print_barcode_page.add_scanned_item(value);
+		};
+		const scan_control = frappe.ui.form.make_control({
+			parent: $scan_area,
+			df: {
+				fieldname: "scan_barcode",
+				fieldtype: "Data",
+				options: "Barcode",
+				label: __("Scan Item"),
+				placeholder: __("Barcode, serial, batch, or item code"),
+				description: __("Scan and press Enter, or use the scan icon. Scanning the same item again adds another label."),
+				onchange: submit_scan,
+			},
+			render_input: true,
+		});
+		scan_control.refresh();
+		// Data fields also run onchange after a pause in typing. That would
+		// look up a half-entered code. Enter and the camera scanner are enough.
+		scan_control.change = () => {};
+		scan_control.$input.on("keydown", (e) => {
+			if (e.key !== "Enter") {
+				return;
+			}
+			e.preventDefault();
+			submit_scan();
+		});
+		scan_control.$input.focus();
 
 		// A live total needs to react to every grid change - row added,
 		// row removed, any field edited - not just the specific onchange
@@ -390,6 +589,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 		barcodes_print.print_barcode_page._state = {
 			page,
 			items_control,
+			scan_control,
 			size_control,
 			columns_control,
 			gap_control,

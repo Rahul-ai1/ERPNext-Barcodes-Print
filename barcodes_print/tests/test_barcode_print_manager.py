@@ -7,7 +7,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from barcodes_print.api.barcode import get_barcode_print_settings, validate_barcode_compatibility
-from barcodes_print.api.item import get_item_barcode_details
+from barcodes_print.api.item import get_item_barcode_details, resolve_scan
 from barcodes_print.api.zpl import (
 	_emphasis_height,
 	_format_mrp,
@@ -1224,3 +1224,44 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertEqual(job["total_labels"], len(serials))
 		self.assertEqual(len(job["resolved_items"]), len(serials))
 		self.assertEqual({r["barcode"] for r in job["resolved_items"]}, set(serials))
+
+	def test_resolve_scan_by_barcode_item_code_batch_and_serial(self):
+		barcode_val = _random_ean13()
+		item_code = f"TEST-SCAN-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "Scannable Item",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": "Nos",
+			"barcodes": [{"barcode": barcode_val, "barcode_type": "EAN-13", "uom": "Nos"}],
+		}).insert(ignore_permissions=True)
+
+		by_barcode = resolve_scan(barcode_val)
+		self.assertEqual(by_barcode["item"], item_code)
+		self.assertEqual(by_barcode["barcode"], barcode_val)
+		self.assertEqual(by_barcode["barcode_type"], "EAN-13")
+
+		by_code = resolve_scan(item_code)
+		self.assertEqual(by_code["item"], item_code)
+		self.assertEqual(by_code["barcode"], barcode_val)
+
+		self.assertEqual(resolve_scan("   "), {})
+		self.assertEqual(resolve_scan(f"MISSING-{frappe.generate_hash(length=6)}"), {})
+
+		batch_item, batch_no = self._create_batch_tracked_item()
+		by_batch = resolve_scan(batch_no)
+		self.assertEqual(by_batch["item"], batch_item)
+		self.assertEqual(by_batch["batch_no"], batch_no)
+
+		serial_item, serials = self._create_serial_tracked_item()
+		by_serial = resolve_scan(serials[0])
+		self.assertEqual(by_serial["item"], serial_item)
+		self.assertEqual(by_serial["serial_no"], serials[0])
+
+	def test_resolve_scan_rejects_disabled_item(self):
+		item_code = self._create_test_item_with_barcode()
+		frappe.db.set_value("Item", item_code, "disabled", 1)
+		with self.assertRaises(frappe.ValidationError):
+			resolve_scan(item_code)
