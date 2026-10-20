@@ -14,6 +14,7 @@ from barcodes_print.api.zpl import (
 	build_label_zpl,
 	get_label_dimensions_dots,
 	get_purchase_document_items,
+	get_purchase_invoice_items,
 	get_quick_print_job,
 	is_purchase_print_enabled_for,
 	log_print,
@@ -1021,6 +1022,101 @@ class TestBarcodePrintManager(FrappeTestCase):
 		}).insert(ignore_permissions=True)
 		po.submit()
 		return po
+
+	def test_get_purchase_invoice_items_loads_stock_lines_and_skips_service(self):
+		stock_item = self._create_test_item_with_barcode()
+		service_item = self._create_service_item()
+		item_code, batch_no = self._create_batch_tracked_item()
+		pi = self._insert_submitted_purchase_invoice([
+			{"item_code": stock_item, "qty": 4, "rate": 10},
+			{"item_code": service_item, "qty": 1, "rate": 50},
+			{"item_code": item_code, "qty": 2, "rate": 8, "batch_no": batch_no},
+		])
+
+		try:
+			draft = self._insert_submitted_purchase_invoice(
+				[{"item_code": stock_item, "qty": 1, "rate": 10}],
+				submit=False,
+			)
+			with self.assertRaises(frappe.ValidationError):
+				get_purchase_invoice_items(draft.name)
+			self._delete_purchase_invoice(draft.name)
+
+			loaded = get_purchase_invoice_items(pi.name)
+			self.assertEqual(loaded["source_doctype"], "Purchase Invoice")
+			self.assertEqual(loaded["source_name"], pi.name)
+			self.assertEqual(len(loaded["items"]), 2)
+			by_item = {row["item"]: row for row in loaded["items"]}
+			self.assertEqual(by_item[stock_item]["no_of_barcodes"], 4)
+			self.assertEqual(by_item[item_code]["batch_no"], batch_no)
+			self.assertEqual(by_item[item_code]["no_of_barcodes"], 2)
+			self.assertNotIn(service_item, by_item)
+		finally:
+			self._delete_purchase_invoice(pi.name)
+
+	def test_get_purchase_invoice_items_splits_bundle_by_batch(self):
+		item_code, first_batch = self._create_batch_tracked_item()
+		second_batch = frappe.get_doc({
+			"doctype": "Batch",
+			"batch_id": f"TEST-BATCH-{frappe.generate_hash(length=6)}",
+			"item": item_code,
+		}).insert(ignore_permissions=True).name
+		pi = self._insert_submitted_purchase_invoice([
+			{"item_code": item_code, "qty": 5, "rate": 8},
+		])
+		company = pi.company
+		warehouse = frappe.get_all("Warehouse", filters={"company": company}, limit=1)[0].name
+		bundle = frappe.get_doc({
+			"doctype": "Serial and Batch Bundle",
+			"item_code": item_code,
+			"warehouse": warehouse,
+			"company": company,
+			"voucher_type": "Purchase Invoice",
+			"type_of_transaction": "Inward",
+			"entries": [
+				{"batch_no": first_batch, "qty": 2},
+				{"batch_no": second_batch, "qty": 3},
+			],
+		})
+		bundle.flags.ignore_validate = True
+		bundle.insert(ignore_permissions=True, ignore_mandatory=True)
+		frappe.db.set_value("Purchase Invoice Item", pi.items[0].name, "serial_and_batch_bundle", bundle.name)
+
+		try:
+			loaded = get_purchase_invoice_items(pi.name)
+			self.assertEqual(
+				[(row["batch_no"], row["no_of_barcodes"]) for row in loaded["items"]],
+				[(first_batch, 2), (second_batch, 3)],
+			)
+		finally:
+			self._delete_purchase_invoice(pi.name)
+			frappe.delete_doc("Serial and Batch Bundle", bundle.name, force=True, ignore_permissions=True)
+
+	def _delete_purchase_invoice(self, name):
+		frappe.db.set_value("Purchase Invoice", name, "docstatus", 0)
+		frappe.db.sql("update `tabPurchase Invoice Item` set docstatus = 0 where parent = %s", name)
+		frappe.delete_doc("Purchase Invoice", name, force=True, ignore_permissions=True)
+
+	def _insert_submitted_purchase_invoice(self, item_rows, submit=True):
+		"""Thin Purchase Invoice for the load API. Accounting validation is
+		skipped because the API only reads submitted stock lines."""
+		supplier = frappe.get_all("Supplier", limit=1)[0].name
+		company = frappe.get_all("Company", limit=1)[0].name
+		pi = frappe.get_doc({
+			"doctype": "Purchase Invoice",
+			"supplier": supplier,
+			"company": company,
+			"posting_date": frappe.utils.nowdate(),
+			"update_stock": 0,
+			"items": item_rows,
+		})
+		pi.flags.ignore_validate = True
+		pi.insert(ignore_permissions=True, ignore_mandatory=True)
+		if submit:
+			pi.db_set("docstatus", 1)
+			for row in pi.items:
+				frappe.db.set_value("Purchase Invoice Item", row.name, "docstatus", 1)
+		return pi
 
 	def test_get_purchase_document_items_excludes_service_items(self):
 		"""Service/non-stock item rows never get a physical barcode label -

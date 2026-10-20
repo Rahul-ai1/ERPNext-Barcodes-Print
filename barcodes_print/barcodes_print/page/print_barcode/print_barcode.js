@@ -148,6 +148,11 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 			onchange: function () {
 				const row = this.grid_row;
 				const item_code = this.value;
+				// Load from Purchase Invoice stamps the row's batch and
+				// serials before this runs. Keep them while the item is
+				// still that loaded item. A later item change drops them.
+				const keep_tracking =
+					!!row.doc._keep_batch_serial && row.doc._loaded_item === item_code;
 				if (!item_code) {
 					["item_name", "uom", "barcode", "barcode_type", "batch_no", "serial_nos"].forEach((f) => {
 						row.doc[f] = "";
@@ -157,9 +162,17 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 					row.refresh_field("rate");
 					row.doc._has_batch_no = 0;
 					row.doc._has_serial_no = 0;
+					row.doc._keep_batch_serial = 0;
+					row.doc._loaded_item = "";
 					barcodes_print.print_barcode_page.update_total();
 					return;
 				}
+				const kept_batch = keep_tracking ? row.doc.batch_no || "" : "";
+				const kept_serials = keep_tracking ? row.doc.serial_nos || "" : "";
+				if (!keep_tracking) {
+					row.doc._keep_batch_serial = 0;
+				}
+				row.doc._loaded_item = item_code;
 				frappe.call({
 					method: "barcodes_print.api.item.get_item_barcode_details",
 					args: { item_code, price_list: row.doc.price_list || "" },
@@ -170,10 +183,8 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 						row.doc.barcode = data.barcode || "";
 						row.doc.barcode_type = data.barcode_type || "";
 						row.doc.rate = data.rate;
-						// A different Item invalidates any Batch No/Serial
-						// Nos picked for the previous one.
-						row.doc.batch_no = "";
-						row.doc.serial_nos = "";
+						row.doc.batch_no = kept_batch;
+						row.doc.serial_nos = kept_serials;
 						row.doc._has_batch_no = data.has_batch_no;
 						row.doc._has_serial_no = data.has_serial_no;
 						["item_name", "uom", "barcode", "barcode_type", "rate", "batch_no", "serial_nos"].forEach((f) =>
@@ -194,9 +205,10 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 						// labelled right away, same as the barcode-choice
 						// prompt above - Batch No is picked separately below
 						// (a Link field of its own) if the item only tracks
-						// batches, not individual serials.
-						if (data.has_serial_no) {
-							barcodes_print.print_barcode_page.prompt_serial_no_choice(row, item_code, "");
+						// batches, not individual serials. A loaded invoice
+						// row already has its serials.
+						if (data.has_serial_no && !kept_serials) {
+							barcodes_print.print_barcode_page.prompt_serial_no_choice(row, item_code, kept_batch);
 						}
 					},
 				});
@@ -446,7 +458,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 	const $source_banner = $("<div>").appendTo($wrapper);
 
 	$(`<p class="text-muted">${__(
-		"Scan a barcode, serial, batch, or item code, or add rows below. Choose a label size and how many columns, then print directly to your label printer. Label Only sizes print the same label with no barcode. Nothing here is saved as a document - each print is a one-time action."
+		"Scan a barcode, serial, batch, or item code, add rows below, or load a submitted Purchase Invoice. Choose a label size and how many columns, then print directly to your label printer. Label Only sizes print the same label with no barcode. Nothing here is saved as a document - each print is a one-time action."
 	)}</p>`).appendTo($wrapper);
 
 	const $scan_area = $('<div class="print-barcode-scan" style="margin-bottom: 15px; max-width: 480px;">').appendTo(
@@ -579,6 +591,9 @@ barcodes_print.print_barcode_page.render = function (page) {
 		gap_control.refresh();
 		gap_control.set_value(default_gap);
 
+		page.add_button(__("Load from Purchase Invoice"), () => {
+			barcodes_print.print_barcode_page.load_from_purchase_invoice();
+		});
 		page.set_primary_action(__("Print"), () => {
 			barcodes_print.print_barcode_page.print();
 		}, "printer");
@@ -623,6 +638,112 @@ barcodes_print.print_barcode_page.update_total = function () {
 	state.$total_area.text(
 		items.length ? __("{0} label(s) across {1} item row(s) will be printed.", [total, items.length]) : ""
 	);
+};
+
+// Toolbar button. Asks for a submitted Purchase Invoice, then replaces the
+// grid with that invoice's stock lines. This is a one-time fill: it does
+// not attach the invoice as a purchase-document source, so the reprint
+// cap used by Purchase Order / Purchase Receipt does not apply.
+barcodes_print.print_barcode_page.load_from_purchase_invoice = function () {
+	const state = barcodes_print.print_barcode_page._state;
+	if (!state) return;
+
+	const open_dialog = () => {
+		const dialog = new frappe.ui.Dialog({
+			title: __("Load from Purchase Invoice"),
+			fields: [
+				{
+					fieldname: "purchase_invoice",
+					fieldtype: "Link",
+					options: "Purchase Invoice",
+					label: __("Purchase Invoice"),
+					reqd: 1,
+					get_query() {
+						return { filters: { docstatus: 1 } };
+					},
+				},
+			],
+			primary_action_label: __("Load"),
+			primary_action(values) {
+				dialog.hide();
+				barcodes_print.print_barcode_page.fetch_purchase_invoice(values.purchase_invoice);
+			},
+		});
+		dialog.show();
+	};
+
+	const existing = state.items_control.get_value() || [];
+	if (existing.length) {
+		frappe.confirm(__("This replaces the items already on the page."), open_dialog);
+		return;
+	}
+	open_dialog();
+};
+
+barcodes_print.print_barcode_page.fetch_purchase_invoice = function (purchase_invoice) {
+	frappe.call({
+		method: "barcodes_print.api.zpl.get_purchase_invoice_items",
+		args: { purchase_invoice },
+		freeze: true,
+		freeze_message: __("Loading items from {0}...", [purchase_invoice]),
+	}).then((r) => {
+		const data = r.message || {};
+		const state = barcodes_print.print_barcode_page._state;
+		if (!state) return;
+
+		state.items_control.grid.grid_rows.slice().forEach((row) => row.remove());
+		state.source_doctype = "";
+		state.source_name = "";
+		state.$source_banner.html(`
+			<div class="alert alert-info" style="margin-bottom: 15px;">
+				${__("Loaded items from {0}. Each line's label count follows its quantity. Service items are left out.", [
+					`<a href="/app/purchase-invoice/${data.source_name}">${data.source_name}</a>`,
+				])}
+			</div>
+		`);
+
+		const grid = state.items_control.grid;
+		(data.items || []).forEach((item_row) => {
+			grid.add_new_row();
+			const row = grid.grid_rows[grid.grid_rows.length - 1];
+			const batch_no = item_row.batch_no || "";
+			const serial_nos = item_row.serial_nos || "";
+			row.doc.item = item_row.item;
+			row.doc.no_of_barcodes = item_row.no_of_barcodes;
+			row.doc.batch_no = batch_no;
+			row.doc.serial_nos = serial_nos;
+			row.doc.price_list = state.default_price_list || "";
+			row.doc.source_row_name = "";
+			row.doc.max_allowed = 0;
+			row.doc._keep_batch_serial = batch_no || serial_nos ? 1 : 0;
+			row.doc._loaded_item = item_row.item;
+			["item", "no_of_barcodes", "batch_no", "serial_nos", "price_list"].forEach((f) => row.refresh_field(f));
+
+			frappe.call({
+				method: "barcodes_print.api.item.get_item_barcode_details",
+				args: { item_code: item_row.item, price_list: row.doc.price_list },
+				callback(details_response) {
+					const item_data = details_response.message || {};
+					row.doc.item_name = item_data.item_name || "";
+					row.doc.uom = item_data.uom || "";
+					row.doc.barcode = item_data.barcode || "";
+					row.doc.barcode_type = item_data.barcode_type || "";
+					row.doc.rate = item_data.rate;
+					row.doc.batch_no = batch_no;
+					row.doc.serial_nos = serial_nos;
+					["item_name", "uom", "barcode", "barcode_type", "rate", "batch_no", "serial_nos"].forEach((f) =>
+						row.refresh_field(f)
+					);
+
+					const choices = item_data.barcodes || [];
+					if (choices.length > 1) {
+						barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
+					}
+				},
+			});
+		});
+		barcodes_print.print_barcode_page.update_total();
+	});
 };
 
 // Called on every page load/show - looks for a hand-off left by a Purchase

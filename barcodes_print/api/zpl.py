@@ -852,6 +852,112 @@ def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 
 
 @frappe.whitelist()
+def get_purchase_invoice_items(purchase_invoice: str) -> dict:
+	"""Rows for the Print Barcode page's Load from Purchase Invoice button.
+
+	Submitted invoices only. Service lines are skipped. A Serial and Batch
+	Bundle is split into one grid row per batch, with serials kept together.
+	These rows are not tied to the purchase-document reprint cap: the page
+	prints them as a one-time label run.
+	"""
+	purchase_invoice = (purchase_invoice or "").strip()
+	if not purchase_invoice:
+		frappe.throw(_("Select a Purchase Invoice."))
+
+	frappe.has_permission("Purchase Invoice", "read", throw=True)
+	doc = frappe.get_doc("Purchase Invoice", purchase_invoice)
+	if doc.docstatus != 1:
+		frappe.throw(_("Purchase Invoice {0} must be submitted.").format(purchase_invoice))
+
+	rows = []
+	for row in doc.items:
+		if not row.item_code or not _is_stock_item(row.item_code):
+			continue
+		rows.extend(_purchase_invoice_label_rows(row))
+
+	if not rows:
+		frappe.throw(_("Purchase Invoice {0} has no stock items to print.").format(purchase_invoice))
+
+	return {"source_doctype": "Purchase Invoice", "source_name": doc.name, "items": rows}
+
+
+def _purchase_invoice_label_rows(row) -> list:
+	bundle_name = row.get("serial_and_batch_bundle")
+	if bundle_name:
+		bundle_rows = _label_rows_from_bundle(row.item_code, bundle_name)
+		if bundle_rows:
+			return bundle_rows
+
+	serials = _split_serials(row.get("serial_no"))
+	qty = _label_qty(row.qty, len(serials))
+	if not qty:
+		return []
+	return [_label_row(row.item_code, qty, row.get("batch_no") or "", serials)]
+
+
+def _label_rows_from_bundle(item_code: str, bundle_name: str) -> list:
+	entries = frappe.get_all(
+		"Serial and Batch Entry",
+		filters={"parent": bundle_name},
+		fields=["serial_no", "batch_no", "qty"],
+		order_by="idx",
+	)
+	if not entries:
+		return []
+
+	by_batch = {}
+	order = []
+	for entry in entries:
+		batch_no = entry.batch_no or ""
+		if batch_no not in by_batch:
+			by_batch[batch_no] = {"serials": [], "qty": 0.0}
+			order.append(batch_no)
+		if entry.serial_no:
+			by_batch[batch_no]["serials"].append(entry.serial_no)
+		else:
+			by_batch[batch_no]["qty"] += abs(frappe.utils.flt(entry.qty))
+
+	rows = []
+	for batch_no in order:
+		slot = by_batch[batch_no]
+		serials = slot["serials"]
+		if serials:
+			rows.append(_label_row(item_code, len(serials), batch_no, serials))
+		qty = _label_qty(slot["qty"], 0)
+		if qty:
+			rows.append(_label_row(item_code, qty, batch_no, []))
+	return rows
+
+
+def _label_row(item_code: str, qty: int, batch_no: str, serials: list) -> dict:
+	return {
+		"item": item_code,
+		"no_of_barcodes": qty,
+		"batch_no": batch_no or "",
+		"serial_nos": "\n".join(serials),
+	}
+
+
+def _label_qty(qty, serial_count: int) -> int:
+	"""Whole labels for a line. Serials win; otherwise the absolute quantity."""
+	if serial_count:
+		return serial_count
+	count = frappe.utils.cint(abs(frappe.utils.flt(qty)))
+	return count
+
+
+def _split_serials(value) -> list:
+	if not value:
+		return []
+	serials = []
+	for chunk in str(value).replace(",", "\n").splitlines():
+		serial = chunk.strip()
+		if serial:
+			serials.append(serial)
+	return serials
+
+
+@frappe.whitelist()
 def get_quick_print_job(
 	items,
 	size: str,
