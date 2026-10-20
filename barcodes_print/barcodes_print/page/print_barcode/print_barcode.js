@@ -461,6 +461,15 @@ barcodes_print.print_barcode_page.render = function (page) {
 		"Scan a barcode, serial, batch, or item code, add rows below, or load a submitted Purchase Invoice. Choose a label size and how many columns, then print directly to your label printer. Label Only sizes print the same label with no barcode. Nothing here is saved as a document - each print is a one-time action."
 	)}</p>`).appendTo($wrapper);
 
+	// In the page body, not only the toolbar. Frappe hides toolbar custom
+	// buttons below the large desktop width, so Print stays visible while
+	// this button would not.
+	const $load_area = $('<div style="margin-bottom: 15px;">').appendTo($wrapper);
+	$(`<button type="button" class="btn btn-default btn-sm"></button>`)
+		.text(__("Load from Purchase Invoice"))
+		.appendTo($load_area)
+		.on("click", () => barcodes_print.print_barcode_page.load_from_purchase_invoice());
+
 	const $scan_area = $('<div class="print-barcode-scan" style="margin-bottom: 15px; max-width: 480px;">').appendTo(
 		$wrapper
 	);
@@ -591,9 +600,10 @@ barcodes_print.print_barcode_page.render = function (page) {
 		gap_control.refresh();
 		gap_control.set_value(default_gap);
 
-		page.add_button(__("Load from Purchase Invoice"), () => {
+		const load_button = page.add_button(__("Load from Purchase Invoice"), () => {
 			barcodes_print.print_barcode_page.load_from_purchase_invoice();
 		});
+		load_button.closest(".custom-actions").removeClass("hidden-xs hidden-md");
 		page.set_primary_action(__("Print"), () => {
 			barcodes_print.print_barcode_page.print();
 		}, "printer");
