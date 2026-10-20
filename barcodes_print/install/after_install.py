@@ -60,6 +60,24 @@ def after_migrate():
 	ensure_item_barcode_types()
 	ensure_purchase_barcode_tracking_fields()
 	ensure_display_rules()
+	refresh_print_barcode_page_cache()
+
+
+def refresh_print_barcode_page_cache():
+	"""Desk stores the Print Barcode script in the browser until Page.modified changes.
+
+	A git pull updates the file, but an already-opened desk keeps the old
+	script. Bumping modified makes the next reload fetch the file again.
+	"""
+	if not frappe.db.exists("Page", "print-barcode"):
+		return
+	frappe.db.set_value(
+		"Page",
+		"print-barcode",
+		"modified",
+		frappe.utils.now_datetime(),
+		update_modified=False,
+	)
 
 
 def seed_barcode_print_settings():
