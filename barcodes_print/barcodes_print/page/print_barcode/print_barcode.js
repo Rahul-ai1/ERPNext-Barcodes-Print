@@ -362,6 +362,7 @@ barcodes_print.print_barcode_page.attach_column_config = function (grid) {
 		} finally {
 			this.frm = saved_frm;
 		}
+		barcodes_print.print_barcode_page._bind_column_gear(this);
 	};
 
 	const saved = (frappe.get_user_settings(settings_doctype, "GridView") || {})[grid.doctype];
@@ -371,6 +372,39 @@ barcodes_print.print_barcode_page.attach_column_config = function (grid) {
 		return;
 	}
 	grid.make_head();
+};
+
+// The gear's own handler reads field definitions from DocType meta. On this
+// page that meta is not loaded yet, so the click throws before the dialog
+// can open. Load it first, and keep the page's own fields as a fallback.
+barcodes_print.print_barcode_page._bind_column_gear = function (grid) {
+	const header = grid.header_row;
+	const button = header && header.configure_columns_button;
+	if (!button || button.data("print-barcode-gear")) return;
+	button.data("print-barcode-gear", 1);
+	button.off("click").on("click", (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		const open_dialog = () => {
+			barcodes_print.print_barcode_page._register_grid_fields(grid);
+			header.configure_dialog_for_columns_selector();
+		};
+		if (frappe.get_meta(grid.doctype)) {
+			open_dialog();
+			return;
+		}
+		frappe.model.with_doctype(grid.doctype, open_dialog);
+	});
+};
+
+barcodes_print.print_barcode_page._register_grid_fields = function (grid) {
+	const doctype = grid.doctype;
+	if (!doctype) return;
+	frappe.meta.docfield_map[doctype] = frappe.meta.docfield_map[doctype] || {};
+	(grid.docfields || []).forEach((df) => {
+		if (!df || !df.fieldname || frappe.meta.docfield_map[doctype][df.fieldname]) return;
+		frappe.meta.docfield_map[doctype][df.fieldname] = Object.assign({ parent: doctype }, df);
+	});
 };
 
 // A handheld scanner types the code and sends Enter. Queue scans so a
