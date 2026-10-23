@@ -7,7 +7,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from barcodes_print.api.barcode import get_barcode_print_settings, validate_barcode_compatibility
-from barcodes_print.api.item import get_item_barcode_details, resolve_scan
+from barcodes_print.api.item import get_item_barcode_details, get_items_from_spreadsheet, resolve_scan
 from barcodes_print.api.zpl import (
 	_emphasis_height,
 	_format_mrp,
@@ -1091,6 +1091,97 @@ class TestBarcodePrintManager(FrappeTestCase):
 		finally:
 			self._delete_purchase_invoice(pi.name)
 			frappe.delete_doc("Serial and Batch Bundle", bundle.name, force=True, ignore_permissions=True)
+
+	def test_get_items_from_spreadsheet_loads_item_code_qty_and_barcode(self):
+		item_code = self._create_test_item_with_barcode()
+		barcode = frappe.db.get_value("Item Barcode", {"parent": item_code}, "barcode")
+		xlsx = frappe.utils.xlsxutils.make_xlsx(
+			[
+				["Item Code", "Qty", "Barcode"],
+				[item_code, 4, barcode],
+				["", "", ""],
+			],
+			"Labels",
+		)
+		file_doc = self._save_spreadsheet("labels.xlsx", xlsx.getvalue())
+
+		loaded = get_items_from_spreadsheet(file_doc.file_url)
+		self.assertEqual(len(loaded["items"]), 1)
+		self.assertEqual(loaded["skipped_count"], 0)
+		row = loaded["items"][0]
+		self.assertEqual(row["item"], item_code)
+		self.assertEqual(row["no_of_barcodes"], 4)
+		self.assertEqual(row["barcode"], barcode)
+
+	def test_get_items_from_spreadsheet_resolves_barcode_and_skips_unknown_rows(self):
+		item_code = self._create_test_item_with_barcode()
+		barcode = frappe.db.get_value("Item Barcode", {"parent": item_code}, "barcode")
+		item_code_with_batch, batch_no = self._create_batch_tracked_item()
+		csv_text = (
+			"Barcode,No. of Barcodes\n"
+			f"{barcode},\n"
+			"NOT-A-REAL-BARCODE,2\n"
+		)
+		file_doc = self._save_spreadsheet("labels.csv", csv_text)
+		loaded = get_items_from_spreadsheet(file_doc.file_url)
+		self.assertEqual(loaded["items"][0]["item"], item_code)
+		self.assertEqual(loaded["items"][0]["no_of_barcodes"], 1)
+		self.assertEqual(loaded["skipped_count"], 1)
+		self.assertIn("not on any Item", loaded["skipped"][0]["message"])
+
+		batch_file = self._save_spreadsheet(
+			"batches.csv",
+			f"Item Code,Batch No,Qty\n{item_code_with_batch},{batch_no},2\n",
+		)
+		batch_loaded = get_items_from_spreadsheet(batch_file.file_url)
+		self.assertEqual(batch_loaded["items"][0]["batch_no"], batch_no)
+		self.assertEqual(batch_loaded["items"][0]["no_of_barcodes"], 2)
+
+		empty = self._save_spreadsheet("missing.csv", "Item Code,Qty\nMISSING-ITEM,1\n")
+		with self.assertRaises(frappe.ValidationError):
+			get_items_from_spreadsheet(empty.file_url)
+
+		wrong_type = self._save_spreadsheet("notes.txt", "Item Code\nABC\n")
+		with self.assertRaises(frappe.ValidationError):
+			get_items_from_spreadsheet(wrong_type.file_url)
+
+	def test_get_item_barcode_details_includes_stock_balance(self):
+		service_item = self._create_service_item()
+		self.assertIsNone(get_item_barcode_details(service_item).get("stock_qty"))
+
+		item_code = self._create_test_item_with_barcode()
+		self.assertEqual(get_item_barcode_details(item_code).get("stock_qty"), 0)
+
+		warehouse = frappe.db.get_value("Warehouse", {"is_group": 0}, "name")
+		bin_doc = frappe.get_doc({"doctype": "Bin", "item_code": item_code, "warehouse": warehouse})
+		bin_doc.db_insert()
+		frappe.db.set_value("Bin", bin_doc.name, "actual_qty", 7)
+		self.assertEqual(get_item_barcode_details(item_code).get("stock_qty"), 7)
+
+		batch_item, batch_no = self._create_batch_tracked_item()
+		frappe.db.set_value("Batch", batch_no, "batch_qty", 3)
+		self.assertEqual(get_item_barcode_details(batch_item, batch_no=batch_no).get("stock_qty"), 3)
+		self.assertIsNone(get_item_barcode_details(batch_item, batch_no="MISSING-BATCH").get("stock_qty"))
+
+	def _save_spreadsheet(self, filename, content):
+		file_doc = frappe.get_doc({
+			"doctype": "File",
+			"file_name": filename,
+			"is_private": 1,
+			"content": content,
+		}).insert(ignore_permissions=True)
+
+		def _remove_uploaded(uploaded=file_doc):
+			import os
+
+			path = uploaded.get_full_path()
+			if frappe.db.exists("File", uploaded.name):
+				frappe.delete_doc("File", uploaded.name, force=True, ignore_permissions=True)
+			elif path and os.path.exists(path):
+				os.remove(path)
+
+		self.addCleanup(_remove_uploaded)
+		return file_doc
 
 	def _delete_purchase_invoice(self, name):
 		frappe.db.set_value("Purchase Invoice", name, "docstatus", 0)

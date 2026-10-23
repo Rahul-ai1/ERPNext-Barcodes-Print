@@ -26,7 +26,7 @@ def get_item_price(item_code: str, price_list: str) -> tuple:
 
 
 @frappe.whitelist()
-def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str = "") -> dict:
+def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str = "", batch_no: str = "") -> dict:
 	if not item_code:
 		return {}
 
@@ -55,6 +55,9 @@ def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str 
 		# Every barcode this Item has, so a caller with more than one can
 		# offer the user an explicit choice instead of silently guessing.
 		"barcodes": [],
+		# None for a non-stock item. 0 is a real empty bin. A Batch No
+		# narrows this to that batch's quantity.
+		"stock_qty": get_item_stock_qty(item_code, batch_no),
 	}
 	if price_list:
 		details["rate"], details["currency"] = get_item_price(item_code, price_list)
@@ -104,6 +107,27 @@ def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str 
 	return details
 
 
+def get_item_stock_qty(item_code: str, batch_no: str = ""):
+	"""On-hand quantity for the Print Barcode row.
+
+	Stock items with no bin yet are 0. A non-stock item has no balance.
+	When the row names a Batch, the balance is that batch's quantity.
+	"""
+	if not item_code or not cint(frappe.db.get_value("Item", item_code, "is_stock_item")):
+		return None
+
+	batch_no = (batch_no or "").strip()
+	if batch_no:
+		batch = frappe.db.get_value("Batch", batch_no, ["item", "batch_qty"], as_dict=True)
+		if not batch or batch.item != item_code:
+			return None
+		return frappe.utils.flt(batch.batch_qty)
+
+	from erpnext.stock.utils import get_latest_stock_qty
+
+	return frappe.utils.flt(get_latest_stock_qty(item_code) or 0)
+
+
 @frappe.whitelist()
 def resolve_scan(search_value: str, price_list: str = "") -> dict:
 	"""Resolve one scanner value into the fields for a Print Barcode row.
@@ -131,7 +155,10 @@ def resolve_scan(search_value: str, price_list: str = "") -> dict:
 		frappe.throw(_("Item {0} is disabled.").format(item_code))
 
 	scanned_barcode = (scan.get("barcode") or "").strip()
-	details = get_item_barcode_details(item_code, barcode=scanned_barcode, price_list=price_list or "")
+	batch_no = scan.get("batch_no") or ""
+	details = get_item_barcode_details(
+		item_code, barcode=scanned_barcode, price_list=price_list or "", batch_no=batch_no
+	)
 	details["item"] = item_code
 	details["batch_no"] = scan.get("batch_no") or ""
 	details["serial_no"] = scan.get("serial_no") or ""
@@ -140,6 +167,249 @@ def resolve_scan(search_value: str, price_list: str = "") -> dict:
 	if scan.get("uom"):
 		details["uom"] = scan.get("uom")
 	return details
+
+
+# Print Barcode's Load from Excel. The first row is a header. One of
+# Item Code or Barcode is required. Qty defaults to 1.
+MAX_SPREADSHEET_ROWS = 1000
+_SHOWN_SKIPPED_ROWS = 50
+_HEADER_FIELDS = {
+	"item_code": "item",
+	"item": "item",
+	"itemcode": "item",
+	"barcode": "barcode",
+	"item_barcode": "barcode",
+	"qty": "qty",
+	"quantity": "qty",
+	"no_of_barcodes": "qty",
+	"no_of_barcode": "qty",
+	"labels": "qty",
+	"copies": "qty",
+	"batch_no": "batch_no",
+	"batch": "batch_no",
+	"batch_number": "batch_no",
+	"serial_no": "serial_nos",
+	"serial_nos": "serial_nos",
+	"serial": "serial_nos",
+	"serials": "serial_nos",
+	"serial_number": "serial_nos",
+	"serial_numbers": "serial_nos",
+}
+
+
+@frappe.whitelist()
+def get_items_from_spreadsheet(file_url: str) -> dict:
+	"""Rows for the Print Barcode page's Load from Excel button.
+
+	Accepts .xlsx, .xls, and .csv. A bad row is skipped and reported.
+	These rows are a one-time label run, same as Load from Purchase Invoice.
+	"""
+	frappe.has_permission("Item", "read", throw=True)
+	header, data_rows, header_row_number = _spreadsheet_table(file_url)
+	columns = _spreadsheet_columns(header)
+	if len(data_rows) > MAX_SPREADSHEET_ROWS:
+		frappe.throw(_("A spreadsheet can load at most {0} rows.").format(MAX_SPREADSHEET_ROWS))
+
+	items = []
+	skipped = []
+	for index, raw_row in enumerate(data_rows):
+		if not any(_cell_text(cell) for cell in raw_row):
+			continue
+		row_number = header_row_number + index + 1
+		parsed, reason = _spreadsheet_label_row(raw_row, columns)
+		if reason:
+			skipped.append({"row": row_number, "message": reason})
+			continue
+		items.append(parsed)
+
+	if not items:
+		_throw_empty_spreadsheet(skipped)
+
+	return {
+		"items": items,
+		"skipped": skipped[:_SHOWN_SKIPPED_ROWS],
+		"skipped_count": len(skipped),
+	}
+
+
+def _spreadsheet_table(file_url: str):
+	rows = _read_spreadsheet_rows(file_url)
+	for index, row in enumerate(rows):
+		if any(_cell_text(cell) for cell in row):
+			return row, rows[index + 1 :], index + 1
+	frappe.throw(_("The file has no rows."))
+
+
+def _read_spreadsheet_rows(file_url: str) -> list:
+	file_url = (file_url or "").strip()
+	if not file_url:
+		frappe.throw(_("Select a file."))
+	file_name = frappe.db.get_value("File", {"file_url": file_url}, "name")
+	if not file_name:
+		frappe.throw(_("The uploaded file was not found."))
+
+	file_doc = frappe.get_doc("File", file_name)
+	filename = (file_doc.file_name or file_url).lower()
+	path = file_doc.get_full_path()
+	try:
+		with open(path, "rb") as handle:
+			content = handle.read()
+	except OSError:
+		frappe.throw(_("Could not read the uploaded file."))
+
+	if filename.endswith(".csv"):
+		from frappe.utils.csvutils import read_csv_content
+
+		return read_csv_content(content) or []
+	if filename.endswith(".xlsx"):
+		from frappe.utils.xlsxutils import read_xlsx_file_from_attached_file
+
+		return read_xlsx_file_from_attached_file(fcontent=content) or []
+	if filename.endswith(".xls"):
+		from frappe.utils.xlsxutils import read_xls_file_from_attached_file
+
+		return read_xls_file_from_attached_file(content) or []
+	frappe.throw(_("Upload an .xlsx, .xls, or .csv file."))
+
+
+def _spreadsheet_columns(header: list) -> dict:
+	columns = {}
+	for index, cell in enumerate(header):
+		field = _HEADER_FIELDS.get(_header_key(cell))
+		if field and field not in columns:
+			columns[field] = index
+	if "item" not in columns and "barcode" not in columns:
+		frappe.throw(_("The first row must include an Item Code or Barcode column."))
+	return columns
+
+
+def _spreadsheet_label_row(raw_row: list, columns: dict):
+	item_text = _column_text(raw_row, columns, "item")
+	barcode = _column_text(raw_row, columns, "barcode")
+	item_code, reason = _item_for_spreadsheet_row(item_text, barcode)
+	if reason:
+		return None, reason
+
+	batch_no = _column_text(raw_row, columns, "batch_no")
+	reason = _batch_for_item(item_code, batch_no)
+	if reason:
+		return None, reason
+
+	serials, reason = _serials_for_item(item_code, _column_text(raw_row, columns, "serial_nos"), batch_no)
+	if reason:
+		return None, reason
+
+	qty, reason = _spreadsheet_qty(_column_value(raw_row, columns, "qty"), serials)
+	if reason:
+		return None, reason
+
+	return {
+		"item": item_code,
+		"barcode": barcode,
+		"no_of_barcodes": qty,
+		"batch_no": batch_no,
+		"serial_nos": "\n".join(serials),
+	}, ""
+
+
+def _item_for_spreadsheet_row(item_code: str, barcode: str):
+	if item_code:
+		if not frappe.db.exists("Item", item_code):
+			return "", _("Item {0} was not found.").format(frappe.utils.escape_html(item_code))
+		if cint(frappe.db.get_value("Item", item_code, "disabled")):
+			return "", _("Item {0} is disabled.").format(frappe.utils.escape_html(item_code))
+		if barcode and not _barcode_on_item(item_code, barcode):
+			return "", _("Barcode {0} is not on Item {1}.").format(
+				frappe.utils.escape_html(barcode), frappe.utils.escape_html(item_code)
+			)
+		return item_code, ""
+
+	if not barcode:
+		return "", _("Enter an Item Code or a Barcode.")
+	parent = frappe.db.get_value("Item Barcode", {"barcode": barcode}, "parent")
+	if not parent or not frappe.db.exists("Item", parent):
+		return "", _("Barcode {0} is not on any Item.").format(frappe.utils.escape_html(barcode))
+	if cint(frappe.db.get_value("Item", parent, "disabled")):
+		return "", _("Item {0} is disabled.").format(frappe.utils.escape_html(parent))
+	return parent, ""
+
+
+def _barcode_on_item(item_code: str, barcode: str) -> bool:
+	return bool(frappe.db.get_value("Item Barcode", {"parent": item_code, "barcode": barcode}, "name"))
+
+
+def _batch_for_item(item_code: str, batch_no: str) -> str:
+	if not batch_no:
+		return ""
+	batch_item = frappe.db.get_value("Batch", batch_no, "item")
+	if batch_item != item_code:
+		return _("Batch {0} is not for Item {1}.").format(
+			frappe.utils.escape_html(batch_no), frappe.utils.escape_html(item_code)
+		)
+	return ""
+
+
+def _serials_for_item(item_code: str, raw_serials: str, batch_no: str):
+	serials = []
+	for chunk in raw_serials.replace(";", "\n").replace(",", "\n").splitlines():
+		serial = chunk.strip()
+		if serial and serial not in serials:
+			serials.append(serial)
+	for serial in serials:
+		row = frappe.db.get_value("Serial No", serial, ["item_code", "batch_no"], as_dict=True)
+		if not row or row.item_code != item_code:
+			return [], _("Serial No {0} is not for Item {1}.").format(
+				frappe.utils.escape_html(serial), frappe.utils.escape_html(item_code)
+			)
+		if batch_no and row.batch_no and row.batch_no != batch_no:
+			return [], _("Serial No {0} is not in Batch {1}.").format(
+				frappe.utils.escape_html(serial), frappe.utils.escape_html(batch_no)
+			)
+	return serials, ""
+
+
+def _spreadsheet_qty(value, serials: list):
+	if serials:
+		return len(serials), ""
+	if value in (None, ""):
+		return 1, ""
+	number = frappe.utils.flt(value)
+	if number < 1 or number != int(number):
+		return 0, _("Qty must be a whole number of at least 1.")
+	return int(number), ""
+
+
+def _throw_empty_spreadsheet(skipped: list):
+	if not skipped:
+		frappe.throw(_("The file has no item rows."))
+	lines = "<br>".join(_("Row {0}: {1}").format(row["row"], row["message"]) for row in skipped[:_SHOWN_SKIPPED_ROWS])
+	frappe.throw(lines, title=_("Could not load the spreadsheet"))
+
+
+def _column_text(raw_row: list, columns: dict, field: str) -> str:
+	return _cell_text(_column_value(raw_row, columns, field))
+
+
+def _column_value(raw_row: list, columns: dict, field: str):
+	index = columns.get(field)
+	if index is None or index >= len(raw_row):
+		return None
+	return raw_row[index]
+
+
+def _header_key(value) -> str:
+	text = _cell_text(value).lower().replace(".", " ").replace("-", " ").replace("/", " ")
+	return "_".join(text.split())
+
+
+def _cell_text(value) -> str:
+	if value is None or isinstance(value, bool):
+		return ""
+	if isinstance(value, float) and value.is_integer():
+		return str(int(value))
+	if isinstance(value, int):
+		return str(value)
+	return str(value).strip()
 
 
 @frappe.whitelist()

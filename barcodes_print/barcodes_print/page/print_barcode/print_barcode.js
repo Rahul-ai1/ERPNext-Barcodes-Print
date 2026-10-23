@@ -136,6 +136,26 @@ barcodes_print.print_barcode_page._refresh_row_rate = function (row) {
 	});
 };
 
+// On-hand quantity for the row's item, or for its Batch when one is set.
+// A non-stock item comes back blank.
+barcodes_print.print_barcode_page._refresh_row_stock = function (row) {
+	if (!row || !row.doc) return;
+	const item_code = row.doc.item;
+	if (!item_code) {
+		row.doc.stock_qty = null;
+		row.refresh_field("stock_qty");
+		return;
+	}
+	frappe.call({
+		method: "barcodes_print.api.item.get_item_barcode_details",
+		args: { item_code, batch_no: row.doc.batch_no || "" },
+		callback(r) {
+			row.doc.stock_qty = (r.message || {}).stock_qty;
+			row.refresh_field("stock_qty");
+		},
+	});
+};
+
 barcodes_print.print_barcode_page.get_item_fields = function (default_price_list) {
 	return [
 		{
@@ -148,9 +168,9 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 			onchange: function () {
 				const row = this.grid_row;
 				const item_code = this.value;
-				// Load from Purchase Invoice stamps the row's batch and
-				// serials before this runs. Keep them while the item is
-				// still that loaded item. A later item change drops them.
+				// A loaded Purchase Invoice or spreadsheet row stamps the
+				// batch and serials before this runs. Keep them while the
+				// item is still that loaded item. A later item change drops them.
 				const keep_tracking =
 					!!row.doc._keep_batch_serial && row.doc._loaded_item === item_code;
 				if (!item_code) {
@@ -159,7 +179,9 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 						row.refresh_field(f);
 					});
 					row.doc.rate = null;
+					row.doc.stock_qty = null;
 					row.refresh_field("rate");
+					row.refresh_field("stock_qty");
 					row.doc._has_batch_no = 0;
 					row.doc._has_serial_no = 0;
 					row.doc._keep_batch_serial = 0;
@@ -175,7 +197,7 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 				row.doc._loaded_item = item_code;
 				frappe.call({
 					method: "barcodes_print.api.item.get_item_barcode_details",
-					args: { item_code, price_list: row.doc.price_list || "" },
+					args: { item_code, price_list: row.doc.price_list || "", batch_no: kept_batch },
 					callback(r) {
 						const data = r.message || {};
 						row.doc.item_name = data.item_name || "";
@@ -183,12 +205,13 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 						row.doc.barcode = data.barcode || "";
 						row.doc.barcode_type = data.barcode_type || "";
 						row.doc.rate = data.rate;
+						row.doc.stock_qty = data.stock_qty;
 						row.doc.batch_no = kept_batch;
 						row.doc.serial_nos = kept_serials;
 						row.doc._has_batch_no = data.has_batch_no;
 						row.doc._has_serial_no = data.has_serial_no;
-						["item_name", "uom", "barcode", "barcode_type", "rate", "batch_no", "serial_nos"].forEach((f) =>
-							row.refresh_field(f)
+						["item_name", "uom", "barcode", "barcode_type", "rate", "stock_qty", "batch_no", "serial_nos"].forEach(
+							(f) => row.refresh_field(f)
 						);
 
 						// More than one barcode on this Item: the server
@@ -216,6 +239,14 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 		},
 		{ fieldname: "item_name", fieldtype: "Data", in_list_view: 1, label: __("Item Name"), read_only: 1 },
 		{ fieldname: "uom", fieldtype: "Link", options: "UOM", in_list_view: 1, label: __("UOM"), read_only: 1 },
+		{
+			fieldname: "stock_qty",
+			fieldtype: "Float",
+			in_list_view: 1,
+			label: __("Stock Balance"),
+			read_only: 1,
+			description: __("Actual quantity on hand. A Batch No shows that batch's quantity."),
+		},
 		{ fieldname: "barcode", fieldtype: "Data", in_list_view: 1, label: __("Barcode"), read_only: 1 },
 		{ fieldname: "barcode_type", fieldtype: "Data", in_list_view: 1, label: __("Barcode Type"), read_only: 1 },
 		{
@@ -229,6 +260,7 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 			},
 			onchange: function () {
 				const row = this.grid_row;
+				barcodes_print.print_barcode_page._refresh_row_stock(row);
 				if (row.doc._has_serial_no && row.doc.item) {
 					barcodes_print.print_barcode_page.prompt_serial_no_choice(row, row.doc.item, this.value || "");
 				}
@@ -427,6 +459,7 @@ barcodes_print.print_barcode_page._fill_scan_row = function (grid, data) {
 	row.doc.barcode = data.barcode || "";
 	row.doc.barcode_type = data.barcode_type || "";
 	row.doc.rate = data.rate;
+	row.doc.stock_qty = data.stock_qty;
 	row.doc.batch_no = data.batch_no || "";
 	row.doc.serial_nos = data.serial_no || "";
 	row.doc.no_of_barcodes = 1;
@@ -440,6 +473,7 @@ barcodes_print.print_barcode_page._fill_scan_row = function (grid, data) {
 		"barcode",
 		"barcode_type",
 		"rate",
+		"stock_qty",
 		"batch_no",
 		"serial_nos",
 		"no_of_barcodes",
@@ -458,7 +492,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 	const $source_banner = $("<div>").appendTo($wrapper);
 
 	$(`<p class="text-muted">${__(
-		"Scan a barcode, serial, batch, or item code, add rows below, or load a submitted Purchase Invoice. Choose a label size and how many columns, then print directly to your label printer. Label Only sizes print the same label with no barcode. Nothing here is saved as a document - each print is a one-time action."
+		"Scan a barcode, serial, batch, or item code, add rows below, load a submitted Purchase Invoice, or load an Excel or CSV file. Choose a label size and how many columns, then print directly to your label printer. Label Only sizes print the same label with no barcode. Nothing here is saved as a document - each print is a one-time action."
 	)}</p>`).appendTo($wrapper);
 
 	// In the page body, not only the toolbar. Frappe hides toolbar custom
@@ -469,6 +503,10 @@ barcodes_print.print_barcode_page.render = function (page) {
 		.text(__("Load from Purchase Invoice"))
 		.appendTo($load_area)
 		.on("click", () => barcodes_print.print_barcode_page.load_from_purchase_invoice());
+	$(`<button type="button" class="btn btn-default btn-sm" style="margin-left: 8px;"></button>`)
+		.text(__("Load from Excel"))
+		.appendTo($load_area)
+		.on("click", () => barcodes_print.print_barcode_page.load_from_excel());
 
 	const $scan_area = $('<div class="print-barcode-scan" style="margin-bottom: 15px; max-width: 480px;">').appendTo(
 		$wrapper
@@ -604,6 +642,10 @@ barcodes_print.print_barcode_page.render = function (page) {
 			barcodes_print.print_barcode_page.load_from_purchase_invoice();
 		});
 		load_button.closest(".custom-actions").removeClass("hidden-xs hidden-md");
+		const excel_button = page.add_button(__("Load from Excel"), () => {
+			barcodes_print.print_barcode_page.load_from_excel();
+		});
+		excel_button.closest(".custom-actions").removeClass("hidden-xs hidden-md");
 		page.set_primary_action(__("Print"), () => {
 			barcodes_print.print_barcode_page.print();
 		}, "printer");
@@ -698,62 +740,152 @@ barcodes_print.print_barcode_page.fetch_purchase_invoice = function (purchase_in
 		freeze_message: __("Loading items from {0}...", [purchase_invoice]),
 	}).then((r) => {
 		const data = r.message || {};
-		const state = barcodes_print.print_barcode_page._state;
-		if (!state) return;
-
-		state.items_control.grid.grid_rows.slice().forEach((row) => row.remove());
-		state.source_doctype = "";
-		state.source_name = "";
-		state.$source_banner.html(`
-			<div class="alert alert-info" style="margin-bottom: 15px;">
+		barcodes_print.print_barcode_page.apply_loaded_items(
+			data.items,
+			`<div class="alert alert-info" style="margin-bottom: 15px;">
 				${__("Loaded items from {0}. Each line's label count follows its quantity. Service items are left out.", [
 					`<a href="/app/purchase-invoice/${data.source_name}">${data.source_name}</a>`,
 				])}
-			</div>
-		`);
-
-		const grid = state.items_control.grid;
-		(data.items || []).forEach((item_row) => {
-			grid.add_new_row();
-			const row = grid.grid_rows[grid.grid_rows.length - 1];
-			const batch_no = item_row.batch_no || "";
-			const serial_nos = item_row.serial_nos || "";
-			row.doc.item = item_row.item;
-			row.doc.no_of_barcodes = item_row.no_of_barcodes;
-			row.doc.batch_no = batch_no;
-			row.doc.serial_nos = serial_nos;
-			row.doc.price_list = state.default_price_list || "";
-			row.doc.source_row_name = "";
-			row.doc.max_allowed = 0;
-			row.doc._keep_batch_serial = batch_no || serial_nos ? 1 : 0;
-			row.doc._loaded_item = item_row.item;
-			["item", "no_of_barcodes", "batch_no", "serial_nos", "price_list"].forEach((f) => row.refresh_field(f));
-
-			frappe.call({
-				method: "barcodes_print.api.item.get_item_barcode_details",
-				args: { item_code: item_row.item, price_list: row.doc.price_list },
-				callback(details_response) {
-					const item_data = details_response.message || {};
-					row.doc.item_name = item_data.item_name || "";
-					row.doc.uom = item_data.uom || "";
-					row.doc.barcode = item_data.barcode || "";
-					row.doc.barcode_type = item_data.barcode_type || "";
-					row.doc.rate = item_data.rate;
-					row.doc.batch_no = batch_no;
-					row.doc.serial_nos = serial_nos;
-					["item_name", "uom", "barcode", "barcode_type", "rate", "batch_no", "serial_nos"].forEach((f) =>
-						row.refresh_field(f)
-					);
-
-					const choices = item_data.barcodes || [];
-					if (choices.length > 1) {
-						barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
-					}
-				},
-			});
-		});
-		barcodes_print.print_barcode_page.update_total();
+			</div>`
+		);
 	});
+};
+
+// Same one-time fill as Purchase Invoice. The file is not kept as a
+// purchase source, so the reprint cap does not apply.
+barcodes_print.print_barcode_page.load_from_excel = function () {
+	const state = barcodes_print.print_barcode_page._state;
+	if (!state) return;
+
+	const open_dialog = () => {
+		const dialog = new frappe.ui.Dialog({
+			title: __("Load from Excel"),
+			fields: [
+				{
+					fieldname: "file",
+					fieldtype: "Attach",
+					label: __("Excel or CSV File"),
+					reqd: 1,
+				},
+				{
+					fieldtype: "HTML",
+					fieldname: "help",
+					options: `<div class="text-muted" style="margin-top: 8px;">
+						${__("The first row is the header. Include Item Code or Barcode. Qty defaults to 1. Batch No and Serial Nos are optional. Keep codes as text so leading zeros stay.")}
+					</div>`,
+				},
+			],
+			primary_action_label: __("Load"),
+			primary_action(values) {
+				dialog.hide();
+				barcodes_print.print_barcode_page.fetch_excel(values.file);
+			},
+		});
+		dialog.show();
+	};
+
+	const existing = state.items_control.get_value() || [];
+	if (existing.length) {
+		frappe.confirm(__("This replaces the items already on the page."), open_dialog);
+		return;
+	}
+	open_dialog();
+};
+
+barcodes_print.print_barcode_page.fetch_excel = function (file_url) {
+	frappe.call({
+		method: "barcodes_print.api.item.get_items_from_spreadsheet",
+		args: { file_url },
+		freeze: true,
+		freeze_message: __("Loading items from the spreadsheet..."),
+	}).then((r) => {
+		const data = r.message || {};
+		const loaded = (data.items || []).length;
+		barcodes_print.print_barcode_page.apply_loaded_items(
+			data.items,
+			`<div class="alert alert-info" style="margin-bottom: 15px;">
+				${__("Loaded {0} item row(s) from the spreadsheet. Qty is the label count. A blank Qty is 1.", [loaded])}
+			</div>`
+		);
+		barcodes_print.print_barcode_page.show_skipped_rows(data);
+	});
+};
+
+barcodes_print.print_barcode_page.show_skipped_rows = function (data) {
+	const skipped = data.skipped || [];
+	if (!skipped.length) return;
+	const extra = Math.max(0, cint(data.skipped_count) - skipped.length);
+	let message = skipped.map((row) => __("Row {0}: {1}", [row.row, row.message])).join("<br>");
+	if (extra) {
+		message += `<br>${__("{0} more row(s) were skipped.", [extra])}`;
+	}
+	frappe.msgprint({
+		title: __("Some rows were skipped"),
+		message,
+		indicator: "orange",
+	});
+};
+
+barcodes_print.print_barcode_page.apply_loaded_items = function (items, banner_html) {
+	const state = barcodes_print.print_barcode_page._state;
+	if (!state) return;
+
+	state.items_control.grid.grid_rows.slice().forEach((row) => row.remove());
+	state.source_doctype = "";
+	state.source_name = "";
+	state.$source_banner.html(banner_html);
+
+	const grid = state.items_control.grid;
+	(items || []).forEach((item_row) => {
+		grid.add_new_row();
+		const row = grid.grid_rows[grid.grid_rows.length - 1];
+		const batch_no = item_row.batch_no || "";
+		const serial_nos = item_row.serial_nos || "";
+		const requested_barcode = item_row.barcode || "";
+		row.doc.item = item_row.item;
+		row.doc.no_of_barcodes = item_row.no_of_barcodes;
+		row.doc.batch_no = batch_no;
+		row.doc.serial_nos = serial_nos;
+		row.doc.price_list = state.default_price_list || "";
+		row.doc.source_row_name = "";
+		row.doc.max_allowed = 0;
+		row.doc._keep_batch_serial = batch_no || serial_nos ? 1 : 0;
+		row.doc._loaded_item = item_row.item;
+		["item", "no_of_barcodes", "batch_no", "serial_nos", "price_list"].forEach((f) => row.refresh_field(f));
+
+		frappe.call({
+			method: "barcodes_print.api.item.get_item_barcode_details",
+			args: {
+				item_code: item_row.item,
+				barcode: requested_barcode,
+				price_list: row.doc.price_list,
+				batch_no,
+			},
+			callback(details_response) {
+				const item_data = details_response.message || {};
+				const choices = item_data.barcodes || [];
+				const matched = requested_barcode
+					? choices.find((choice) => choice.barcode === requested_barcode)
+					: null;
+				row.doc.item_name = item_data.item_name || "";
+				row.doc.uom = item_data.uom || "";
+				row.doc.barcode = matched ? matched.barcode : item_data.barcode || "";
+				row.doc.barcode_type = matched ? matched.barcode_type || "" : item_data.barcode_type || "";
+				row.doc.rate = item_data.rate;
+				row.doc.stock_qty = item_data.stock_qty;
+				row.doc.batch_no = batch_no;
+				row.doc.serial_nos = serial_nos;
+				["item_name", "uom", "barcode", "barcode_type", "rate", "stock_qty", "batch_no", "serial_nos"].forEach(
+					(f) => row.refresh_field(f)
+				);
+
+				if (!matched && choices.length > 1) {
+					barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
+				}
+			},
+		});
+	});
+	barcodes_print.print_barcode_page.update_total();
 };
 
 // Called on every page load/show - looks for a hand-off left by a Purchase
@@ -821,7 +953,10 @@ barcodes_print.print_barcode_page.apply_route_options = function () {
 					row.doc.barcode = item_data.barcode || "";
 					row.doc.barcode_type = item_data.barcode_type || "";
 					row.doc.rate = item_data.rate;
-					["item_name", "uom", "barcode", "barcode_type", "rate"].forEach((f) => row.refresh_field(f));
+					row.doc.stock_qty = item_data.stock_qty;
+					["item_name", "uom", "barcode", "barcode_type", "rate", "stock_qty"].forEach((f) =>
+						row.refresh_field(f)
+					);
 
 					const choices = item_data.barcodes || [];
 					if (choices.length > 1) {
