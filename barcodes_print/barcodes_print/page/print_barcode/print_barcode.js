@@ -320,11 +320,19 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 	];
 };
 
-// The page grid has no parent form, so Frappe draws an empty header cell
-// instead of the usual Configure Columns gear. This button opens that same
-// dialog and keeps the choice in the user's Print Label Item settings.
+// Sales Invoice shows a settings gear on the item-grid header. That gear is
+// drawn only when the header row has a form. This page has no document, so
+// the form is present just long enough to build the header, then removed.
+// Leaving it on the grid would make Frappe read rows from a parent document.
 barcodes_print.print_barcode_page.attach_column_config = function (grid) {
 	const settings_doctype = "Print Label Item";
+	const header_frm = {
+		doctype: settings_doctype,
+		meta: {},
+		get_perm() {
+			return 1;
+		},
+	};
 
 	grid.setup_user_defined_columns = function () {
 		const saved = (frappe.get_user_settings(settings_doctype, "GridView") || {})[this.doctype];
@@ -345,21 +353,24 @@ barcodes_print.print_barcode_page.attach_column_config = function (grid) {
 			.filter(Boolean);
 	};
 
-	grid.add_custom_button(
-		__("Configure Columns"),
-		() => {
-			const header = grid.header_row;
-			if (!header) return;
-			header.frm = { doctype: settings_doctype };
-			header.configure_dialog_for_columns_selector();
-		},
-		"top"
-	);
+	const make_head = grid.make_head;
+	grid.make_head = function () {
+		const saved_frm = this.frm;
+		this.frm = header_frm;
+		try {
+			make_head.call(this);
+		} finally {
+			this.frm = saved_frm;
+		}
+	};
 
-	if ((frappe.get_user_settings(settings_doctype, "GridView") || {})[grid.doctype]) {
+	const saved = (frappe.get_user_settings(settings_doctype, "GridView") || {})[grid.doctype];
+	if (saved && saved.length) {
 		grid.visible_columns = [];
 		grid.refresh();
+		return;
 	}
+	grid.make_head();
 };
 
 // A handheld scanner types the code and sends Enter. Queue scans so a
