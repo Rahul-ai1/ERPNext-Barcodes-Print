@@ -248,31 +248,6 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 			description: __("Actual quantity on hand. A Batch No shows that batch's quantity."),
 		},
 		{ fieldname: "barcode", fieldtype: "Data", in_list_view: 1, label: __("Barcode"), read_only: 1 },
-		{ fieldname: "barcode_type", fieldtype: "Data", in_list_view: 1, label: __("Barcode Type"), read_only: 1 },
-		{
-			fieldname: "batch_no",
-			fieldtype: "Link",
-			options: "Batch",
-			in_list_view: 1,
-			label: __("Batch No"),
-			get_query: function (doc) {
-				return { filters: { item: doc.item, disabled: 0 } };
-			},
-			onchange: function () {
-				const row = this.grid_row;
-				barcodes_print.print_barcode_page._refresh_row_stock(row);
-				if (row.doc._has_serial_no && row.doc.item) {
-					barcodes_print.print_barcode_page.prompt_serial_no_choice(row, row.doc.item, this.value || "");
-				}
-			},
-		},
-		{
-			fieldname: "serial_nos",
-			fieldtype: "Small Text",
-			in_list_view: 1,
-			label: __("Serial Nos"),
-			read_only: 1,
-		},
 		{
 			fieldname: "no_of_barcodes",
 			fieldtype: "Int",
@@ -311,6 +286,31 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 			read_only: 1,
 			description: __("Auto-fetched from Price List. Prints as N/A if no price is found."),
 		},
+		{ fieldname: "barcode_type", fieldtype: "Data", in_list_view: 1, label: __("Barcode Type"), read_only: 1 },
+		{
+			fieldname: "batch_no",
+			fieldtype: "Link",
+			options: "Batch",
+			in_list_view: 1,
+			label: __("Batch No"),
+			get_query: function (doc) {
+				return { filters: { item: doc.item, disabled: 0 } };
+			},
+			onchange: function () {
+				const row = this.grid_row;
+				barcodes_print.print_barcode_page._refresh_row_stock(row);
+				if (row.doc._has_serial_no && row.doc.item) {
+					barcodes_print.print_barcode_page.prompt_serial_no_choice(row, row.doc.item, this.value || "");
+				}
+			},
+		},
+		{
+			fieldname: "serial_nos",
+			fieldtype: "Small Text",
+			in_list_view: 1,
+			label: __("Serial Nos"),
+			read_only: 1,
+		},
 		// Hidden bookkeeping only, never rendered as a grid column:
 		// which Purchase Order/Purchase Receipt line (if any) this row
 		// came from, so a successful print can bump that line's own
@@ -318,6 +318,48 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 		{ fieldname: "source_row_name", fieldtype: "Data", hidden: 1 },
 		{ fieldname: "max_allowed", fieldtype: "Int", hidden: 1 },
 	];
+};
+
+// The page grid has no parent form, so Frappe draws an empty header cell
+// instead of the usual Configure Columns gear. This button opens that same
+// dialog and keeps the choice in the user's Print Label Item settings.
+barcodes_print.print_barcode_page.attach_column_config = function (grid) {
+	const settings_doctype = "Print Label Item";
+
+	grid.setup_user_defined_columns = function () {
+		const saved = (frappe.get_user_settings(settings_doctype, "GridView") || {})[this.doctype];
+		if (!saved || !saved.length) {
+			this.user_defined_columns = [];
+			return;
+		}
+		this.user_defined_columns = saved
+			.map((row) => {
+				const source = (this.docfields || []).find((df) => df.fieldname === row.fieldname);
+				if (!source || source.hidden) return null;
+				const column = Object.assign({}, source);
+				column.in_list_view = 1;
+				column.columns = row.columns;
+				column.sticky = row.sticky;
+				return column;
+			})
+			.filter(Boolean);
+	};
+
+	grid.add_custom_button(
+		__("Configure Columns"),
+		() => {
+			const header = grid.header_row;
+			if (!header) return;
+			header.frm = { doctype: settings_doctype };
+			header.configure_dialog_for_columns_selector();
+		},
+		"top"
+	);
+
+	if ((frappe.get_user_settings(settings_doctype, "GridView") || {})[grid.doctype]) {
+		grid.visible_columns = [];
+		grid.refresh();
+	}
 };
 
 // A handheld scanner types the code and sends Enter. Queue scans so a
@@ -523,9 +565,15 @@ barcodes_print.print_barcode_page.render = function (page) {
 	// built until this one small, read-permission-light call returns.
 	// Returned so callers (on_page_load) can wait for _state to exist
 	// before doing anything that depends on it (e.g. apply_route_options).
-	return frappe.call({
-		method: "barcodes_print.api.barcode.get_print_barcode_page_defaults",
-	}).then((r) => {
+	// Column choices are stored on Print Label Item user settings so the
+	// grid can apply them on this first build.
+	return Promise.all([
+		frappe.call({
+			method: "barcodes_print.api.barcode.get_print_barcode_page_defaults",
+		}),
+		frappe.model.user_settings.get("Print Label Item").catch(() => ({})),
+	]).then(([r, column_settings]) => {
+		frappe.model.user_settings["Print Label Item"] = column_settings || {};
 		const defaults = r.message || {};
 		const default_price_list = defaults.default_price_list || "";
 		const default_columns = String(cint(defaults.number_of_columns) || 1);
@@ -545,6 +593,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 			render_input: true,
 		});
 		items_control.refresh();
+		barcodes_print.print_barcode_page.attach_column_config(items_control.grid);
 
 		const submit_scan = () => {
 			const value = cstr(scan_control.get_value()).trim();
