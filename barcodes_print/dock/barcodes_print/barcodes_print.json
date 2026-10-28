@@ -1,0 +1,18 @@
+{
+ "app": "barcodes_print",
+ "doctype": "Dock",
+ "idx": 0,
+ "items": [
+  {
+   "added": 0,
+   "hidden": 0,
+   "icon": "printing-printer-soft",
+   "link_to": "Barcodes Print",
+   "link_type": "Sidebar",
+   "title": "Barcodes Print"
+  }
+ ],
+ "name": "barcodes_print",
+ "standard": 1,
+ "user": ""
+}
