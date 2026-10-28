@@ -130,6 +130,11 @@ def ensure_item_barcode_types():
 	needed_options = [
 		"ITF", "ITF-14", "CODE-128", "Code 128", "Code 39",
 		"UPC-E", "QR Code", "Data Matrix", "Custom",
+		# EAN-13/GTIN-14 are vanilla v16 options, but Frappe v15 calls the
+		# first one "EAN-12" and never shipped the second at all - setting
+		# either as a barcode_type on v15 would otherwise silently blank
+		# back to "" on save, since it isn't a valid Select option there.
+		"EAN-13", "GTIN-14",
 	]
 	updated = False
 	new_options = list(current_options)
