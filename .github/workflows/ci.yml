@@ -11,9 +11,19 @@ concurrency:
 
 jobs:
   install:
-    name: Install
+    name: Install (${{ matrix.frappe_branch }})
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frappe_branch: version-15
+            python_version: "3.11"
+            node_version: 18
+          - frappe_branch: version-16
+            python_version: "3.14"
+            node_version: 24
     services:
       mariadb:
         image: mariadb:11.8
@@ -34,19 +44,19 @@ jobs:
           path: barcodes_print
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: ${{ matrix.python_version }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: ${{ matrix.node_version }}
       - name: Install bench
         run: |
           pip install frappe-bench
           sudo apt-get update && sudo apt-get install -y libmariadb-dev
-      - name: Init bench with Frappe and ERPNext (version-16)
+      - name: Init bench with Frappe and ERPNext (${{ matrix.frappe_branch }})
         run: |
-          bench init --skip-redis-config-generation --frappe-branch version-16 --python "$(which python)" ~/frappe-bench
+          bench init --skip-redis-config-generation --frappe-branch ${{ matrix.frappe_branch }} --python "$(which python)" ~/frappe-bench
           cd ~/frappe-bench
-          bench get-app --branch version-16 erpnext https://github.com/frappe/erpnext
+          bench get-app --branch ${{ matrix.frappe_branch }} erpnext https://github.com/frappe/erpnext
           bench get-app barcodes_print "$GITHUB_WORKSPACE/barcodes_print"
           bench set-config -g db_host 127.0.0.1
           bench set-config -g redis_cache redis://127.0.0.1:6379
