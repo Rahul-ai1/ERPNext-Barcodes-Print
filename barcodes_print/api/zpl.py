@@ -572,11 +572,17 @@ def get_quick_print_job(items, size: str, source_doctype: str = "", source_name:
 
 	width_mm_field, height_mm_field = LABEL_SIZE_SETTINGS_FIELDS[size]
 
+	# Fallback chain: this user's own saved printer, then the site-wide
+	# default, then blank - which leaves the client-side connector to fall
+	# back to the OS default printer, exactly as it already does today.
+	my_printer = frappe.db.get_value("User", frappe.session.user, "custom_default_label_printer")
+	printer = my_printer or settings["default_label_printer"]
+
 	return {
 		"zpl": "\n".join(blocks),
 		"total_labels": total_labels,
 		"connector": settings["print_connector"],
-		"printer": settings["default_label_printer"],
+		"printer": printer,
 		"label_width_mm": settings[width_mm_field],
 		"label_height_mm": settings[height_mm_field],
 		"resolved_items": resolved_items,

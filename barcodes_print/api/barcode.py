@@ -101,7 +101,13 @@ def get_print_barcode_page_defaults() -> dict:
 	row's Price List) - the full settings dict is read-restricted to
 	System Manager, but anyone allowed to use this page needs this much."""
 	frappe.has_permission("Barcode Print Log", "read", throw=True)
-	return {"default_price_list": frappe.db.get_single_value("Barcode Print Settings", "default_price_list") or ""}
+	return {
+		"default_price_list": frappe.db.get_single_value("Barcode Print Settings", "default_price_list") or "",
+		"print_connector": frappe.db.get_single_value("Barcode Print Settings", "print_connector") or "",
+		"my_default_printer": frappe.db.get_value(
+			"User", frappe.session.user, "custom_default_label_printer"
+		) or "",
+	}
 
 
 def get_barcode_print_settings() -> dict:

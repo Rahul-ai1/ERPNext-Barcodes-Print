@@ -65,6 +65,7 @@ def after_install():
 	ensure_item_barcode_types()
 	ensure_item_barcode_default_field()
 	ensure_purchase_barcode_tracking_fields()
+	ensure_user_default_printer_field()
 	ensure_display_rules()
 
 
@@ -74,7 +75,30 @@ def after_migrate():
 	ensure_item_barcode_types()
 	ensure_item_barcode_default_field()
 	ensure_purchase_barcode_tracking_fields()
+	ensure_user_default_printer_field()
 	ensure_display_rules()
+
+
+def ensure_user_default_printer_field():
+	"""Each user's own saved label printer (see api.printer) - a Custom
+	Field on core User, hidden from the standard User form since it's only
+	ever set via the Print Barcode page's own picker, never edited there
+	directly."""
+	if frappe.db.exists("Custom Field", {"dt": "User", "fieldname": "custom_default_label_printer"}):
+		return
+
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	create_custom_field(
+		"User",
+		{
+			"fieldname": "custom_default_label_printer",
+			"label": "Default Label Printer (Barcodes Print)",
+			"fieldtype": "Data",
+			"hidden": 1,
+			"description": "Set from the Print Barcode page's own \"My Printer\" picker - not editable here.",
+		},
+	)
 
 
 def seed_barcode_print_settings():

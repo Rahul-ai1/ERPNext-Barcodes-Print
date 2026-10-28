@@ -296,6 +296,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 	const $items_area = $('<div style="margin-bottom: 10px;">').appendTo($wrapper);
 	const $total_area = $('<div class="text-muted" style="margin-bottom: 20px; font-size: 13px;">').appendTo($wrapper);
 	const $size_area = $('<div style="max-width: 200px;">').appendTo($wrapper);
+	const $printer_area = $('<div class="text-muted" style="margin-top: 10px; font-size: 13px;">').appendTo($wrapper);
 
 	// The Price List column's per-row default needs Barcode Print
 	// Settings' Default Price List up front, so the grid itself isn't
@@ -305,7 +306,10 @@ barcodes_print.print_barcode_page.render = function (page) {
 	return frappe.call({
 		method: "barcodes_print.api.barcode.get_print_barcode_page_defaults",
 	}).then((r) => {
-		const default_price_list = (r.message || {}).default_price_list || "";
+		const defaults = r.message || {};
+		const default_price_list = defaults.default_price_list || "";
+		const print_connector = defaults.print_connector || "";
+		const my_default_printer = defaults.my_default_printer || "";
 
 		const items_control = frappe.ui.form.make_control({
 			parent: $items_area,
@@ -356,14 +360,85 @@ barcodes_print.print_barcode_page.render = function (page) {
 			items_control,
 			size_control,
 			default_price_list,
+			print_connector,
+			my_default_printer,
 			$source_banner,
 			$total_area,
+			$printer_area,
 			source_doctype: "",
 			source_name: "",
 		};
 
 		barcodes_print.print_barcode_page.update_total();
+		barcodes_print.print_barcode_page.render_my_printer();
 	});
+};
+
+// The current user's own saved printer (see api.printer) - shown so it's
+// obvious which printer a click of "Print" will actually go to, with a
+// "Change" link into a live picker rather than a free-text field a typo
+// could silently break.
+barcodes_print.print_barcode_page.render_my_printer = function () {
+	const state = barcodes_print.print_barcode_page._state;
+	const label = state.my_default_printer
+		? __("My Printer: {0}", [state.my_default_printer])
+		: __("My Printer: not set (using the site default/OS default)");
+	state.$printer_area.empty();
+	$(`<span>${frappe.utils.escape_html(label)}</span> `).appendTo(state.$printer_area);
+	$(`<a href="#" style="margin-left: 6px;">${__("Change")}</a>`)
+		.appendTo(state.$printer_area)
+		.on("click", (e) => {
+			e.preventDefault();
+			barcodes_print.print_barcode_page.prompt_my_printer_choice();
+		});
+};
+
+// Lists live printers from whichever connector Barcode Print Settings
+// currently has active, lets the user pick one, and saves it as their own
+// default via api.printer.set_my_default_printer - scoped server-side to
+// the calling user, so this can never affect anyone else's.
+barcodes_print.print_barcode_page.prompt_my_printer_choice = function () {
+	const state = barcodes_print.print_barcode_page._state;
+	const is_zebra = state.print_connector === "Zebra Browser Print";
+	const list_printers = () =>
+		is_zebra ? barcodes_print.zebra.list_printers() : barcodes_print.qz.list_printers();
+
+	frappe.show_alert({ message: __("Looking for printers..."), indicator: "blue" });
+	list_printers()
+		.then((printers) => {
+			if (!printers || !printers.length) {
+				frappe.msgprint(
+					__("No printers were found via {0}. Make sure it's installed, running, and connected, then try again.", [
+						is_zebra ? "Zebra Browser Print" : "QZ Tray",
+					])
+				);
+				return;
+			}
+			frappe.prompt(
+				{
+					fieldname: "printer",
+					fieldtype: "Select",
+					label: __("My Printer"),
+					options: printers,
+					default: state.my_default_printer || printers[0],
+					reqd: 1,
+				},
+				(values) => {
+					frappe.call({
+						method: "barcodes_print.api.printer.set_my_default_printer",
+						args: { printer_name: values.printer },
+					}).then(() => {
+						state.my_default_printer = values.printer;
+						barcodes_print.print_barcode_page.render_my_printer();
+						frappe.show_alert({ message: __("Saved"), indicator: "green" });
+					});
+				},
+				__("Set My Printer")
+			);
+		})
+		.catch((err) => {
+			frappe.msgprint(__("Could not list printers: {0}", [err.message || err]));
+		});
 };
 
 // A live running total, updated on every row add/remove/quantity change -

@@ -91,6 +91,15 @@ barcodes_print.qz = {
 		return default_printer;
 	},
 
+	// Used by the Print Barcode page's "My Printer" picker - the live list
+	// of printers QZ Tray can see on this PC, for a dropdown rather than
+	// a free-text field a typo could silently break.
+	async list_printers() {
+		await this.ensure_connected();
+		const printers = await qz.printers.find();
+		return Array.isArray(printers) ? printers : [printers].filter(Boolean);
+	},
+
 	async print(job) {
 		await this.ensure_connected();
 		const printer_name = await this.resolve_printer(job.printer);

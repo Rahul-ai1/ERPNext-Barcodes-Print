@@ -8,6 +8,7 @@ from frappe.tests.utils import FrappeTestCase
 
 from barcodes_print.api.barcode import get_barcode_print_settings, validate_barcode_compatibility
 from barcodes_print.api.item import get_item_barcode_details
+from barcodes_print.api.printer import get_my_default_printer, set_my_default_printer
 from barcodes_print.api.zpl import (
 	build_label_zpl,
 	get_label_dimensions_dots,
@@ -556,6 +557,28 @@ class TestBarcodePrintManager(FrappeTestCase):
 		)
 		self.assertEqual(job["total_labels"], 3)
 		self.assertEqual(len(job["resolved_items"]), 2)
+
+	def test_quick_print_job_prefers_users_own_printer_over_site_default(self):
+		"""Fallback chain: the calling user's own saved printer (see
+		api.printer) wins over Barcode Print Settings' site-wide default."""
+		item_code = self._create_test_item_with_barcode()
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		original_site_printer = settings_doc.default_label_printer
+		original_my_printer = get_my_default_printer()
+		settings_doc.default_label_printer = "Site-Wide-Printer"
+		settings_doc.save(ignore_permissions=True)
+
+		try:
+			job = get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Medium")
+			self.assertEqual(job["printer"], "Site-Wide-Printer")
+
+			set_my_default_printer("My-Own-Printer")
+			job = get_quick_print_job([{"item": item_code, "no_of_barcodes": 1}], "Medium")
+			self.assertEqual(job["printer"], "My-Own-Printer")
+		finally:
+			set_my_default_printer(original_my_printer)
+			settings_doc.default_label_printer = original_site_printer
+			settings_doc.save(ignore_permissions=True)
 
 	def test_get_quick_print_job_requires_at_least_one_item(self):
 		with self.assertRaises(frappe.ValidationError):
