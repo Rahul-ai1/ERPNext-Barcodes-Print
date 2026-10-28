@@ -185,8 +185,12 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 						// guessing (data.barcode is "" here) - ask which
 						// one to use instead of silently picking the
 						// first row in the Item's own Barcodes table.
+						// If exactly one row is marked Default, the server
+						// already resolved data.barcode above - no prompt,
+						// but the dropdown below still lets the user pick
+						// a different one for this print.
 						const choices = data.barcodes || [];
-						if (choices.length > 1) {
+						if (choices.length > 1 && !data.barcode) {
 							barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
 						}
 
@@ -451,7 +455,7 @@ barcodes_print.print_barcode_page.apply_route_options = function () {
 					["item_name", "uom", "barcode", "barcode_type", "rate"].forEach((f) => row.refresh_field(f));
 
 					const choices = item_data.barcodes || [];
-					if (choices.length > 1) {
+					if (choices.length > 1 && !item_data.barcode) {
 						barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
 					}
 				},

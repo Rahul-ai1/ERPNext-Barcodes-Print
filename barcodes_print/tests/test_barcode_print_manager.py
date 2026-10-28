@@ -42,6 +42,7 @@ def _random_code128() -> str:
 
 class TestBarcodePrintManager(FrappeTestCase):
 	def setUp(self):
+		self._ensure_core_masters()
 		settings = frappe.get_single("Barcode Print Settings")
 		settings.set("display_rules", [])
 		for size in ("Small", "Medium", "Large"):
@@ -65,6 +66,79 @@ class TestBarcodePrintManager(FrappeTestCase):
 		settings.large_height_mm = 75
 		settings.save(ignore_permissions=True)
 
+	def _ensure_core_masters(self):
+		"""Every test item in this file hardcodes item_group="All Item
+		Groups" and stock_uom="Nos". Both are normally created by
+		ERPNext's setup wizard - a fresh CI site never runs that, so
+		create them once if missing rather than assuming they exist."""
+		if not frappe.db.exists("Item Group", "All Item Groups"):
+			frappe.get_doc({
+				"doctype": "Item Group",
+				"item_group_name": "All Item Groups",
+				"is_group": 1,
+			}).insert(ignore_permissions=True)
+		for uom in ("Nos", "Box"):
+			if not frappe.db.exists("UOM", uom):
+				frappe.get_doc({
+					"doctype": "UOM",
+					"uom_name": uom,
+				}).insert(ignore_permissions=True)
+		if not frappe.db.exists("Supplier Group", "All Supplier Groups"):
+			frappe.get_doc({
+				"doctype": "Supplier Group",
+				"supplier_group_name": "All Supplier Groups",
+				"is_group": 1,
+			}).insert(ignore_permissions=True)
+		if not frappe.get_single_value("Stock Settings", "enable_serial_and_batch_no_for_item"):
+			frappe.db.set_single_value("Stock Settings", "enable_serial_and_batch_no_for_item", 1)
+		if not frappe.db.exists("Warehouse Type", "Transit"):
+			# Company.create_default_warehouses() always creates a "Goods In
+			# Transit" warehouse of this type - needed before any Company
+			# insert, not just before a Warehouse insert.
+			frappe.get_doc({
+				"doctype": "Warehouse Type",
+				"name": "Transit",
+			}).insert(ignore_permissions=True)
+
+	def _ensure_fiscal_year_for_company(self, company_name):
+		"""A Purchase Order needs a Fiscal Year covering today's date for its
+		company - normally seeded by the setup wizard. Rather than add a
+		new global one (which can collide with an unrelated, even disabled,
+		Fiscal Year's date range on a bench with real pre-existing data),
+		scope it to just this company - that can never overlap since
+		ERPNext's own overlap check only compares within the same company
+		scope (or between two fully global entries)."""
+		today = frappe.utils.getdate()
+		candidates = frappe.get_all(
+			"Fiscal Year",
+			filters={"year_start_date": ["<=", today], "year_end_date": [">=", today], "disabled": 0},
+			pluck="name",
+		)
+		if candidates:
+			restrictions = frappe.get_all(
+				"Fiscal Year Company",
+				filters={"parent": ["in", candidates]},
+				fields=["parent", "company"],
+			)
+			companies_by_parent = {}
+			for r in restrictions:
+				companies_by_parent.setdefault(r.parent, set()).add(r.company)
+			usable = any(
+				name not in companies_by_parent or company_name in companies_by_parent[name]
+				for name in candidates
+			)
+		else:
+			usable = False
+
+		if not usable:
+			frappe.get_doc({
+				"doctype": "Fiscal Year",
+				"year": f"_Test FY {today.year} {frappe.generate_hash(length=4)}",
+				"year_start_date": today.replace(month=1, day=1),
+				"year_end_date": today.replace(month=12, day=31),
+				"companies": [{"company": company_name}],
+			}).insert(ignore_permissions=True)
+
 	def _set_display_rule(self, settings_doc, size, **overrides):
 		"""Test helper: update one size's Display Rule row in place and save."""
 		for row in settings_doc.display_rules:
@@ -72,6 +146,37 @@ class TestBarcodePrintManager(FrappeTestCase):
 				row.update(overrides)
 				break
 		settings_doc.save(ignore_permissions=True)
+
+	def _get_or_create_company(self):
+		"""A dev bench that's been used for real work already has a Company;
+		a fresh CI site (no setup wizard run) has none - create a minimal
+		one rather than assuming it exists. Creating it also triggers
+		ERPNext's own default-warehouse creation for that company."""
+		existing = frappe.get_all("Company", limit=1)
+		if existing:
+			company_name = existing[0].name
+		else:
+			company_name = frappe.get_doc({
+				"doctype": "Company",
+				"company_name": "_Test Company",
+				"abbr": "_TC",
+				"default_currency": "INR",
+				"country": "India",
+			}).insert(ignore_permissions=True).name
+		self._ensure_fiscal_year_for_company(company_name)
+		return company_name
+
+	def _get_or_create_supplier(self):
+		existing = frappe.get_all("Supplier", limit=1)
+		if existing:
+			return existing[0].name
+		supplier_group = frappe.get_all("Supplier Group", limit=1)
+		return frappe.get_doc({
+			"doctype": "Supplier",
+			"supplier_name": "_Test Supplier",
+			"supplier_group": supplier_group[0].name if supplier_group else "All Supplier Groups",
+			"supplier_type": "Company",
+		}).insert(ignore_permissions=True).name
 
 	def test_autofetch_case1_barcode_available(self):
 		"""Case 1: Item with barcode in Item Master -> resolve_row auto-fetches
@@ -216,6 +321,49 @@ class TestBarcodePrintManager(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError) as ctx:
 			resolve_row(item_code, no_of_barcodes=1)
 		self.assertIn("2 barcodes", str(ctx.exception))
+
+	def test_default_barcode_is_auto_selected_among_multiple(self):
+		"""One row marked Default among 2+ barcodes is auto-picked instead
+		of being left blank for the user to choose."""
+		item_code = f"TEST-ITEM-DEFAULT-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "Item With Default Barcode",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": "Nos",
+			"barcodes": [
+				{"barcode": "CODE-NOTDEFAULT", "barcode_type": "Code 128"},
+				{"barcode": "CODE-ISDEFAULT", "barcode_type": "Code 128", "custom_default": 1},
+			],
+		}).insert(ignore_permissions=True)
+
+		details = get_item_barcode_details(item_code)
+		self.assertEqual(details.get("barcode"), "CODE-ISDEFAULT")
+		self.assertEqual(details.get("barcode_type"), "Code 128")
+		default_flags = {b["barcode"]: b["default"] for b in details["barcodes"]}
+		self.assertEqual(default_flags, {"CODE-NOTDEFAULT": 0, "CODE-ISDEFAULT": 1})
+
+	def test_item_save_blocks_more_than_one_default_barcode(self):
+		"""Only one Barcodes row per Item may be marked Default - saving
+		with 2+ marked throws instead of silently picking one, so a Data
+		Import/API write can't leave the item in an ambiguous state."""
+		item_code = f"TEST-ITEM-2DEFAULTS-{frappe.generate_hash(length=6)}"
+		item = frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "Item With Two Defaults",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": "Nos",
+			"barcodes": [
+				{"barcode": "CODE-ONE", "barcode_type": "Code 128", "custom_default": 1},
+				{"barcode": "CODE-TWO", "barcode_type": "Code 128", "custom_default": 1},
+			],
+		})
+		with self.assertRaises(frappe.ValidationError):
+			item.insert(ignore_permissions=True)
 
 	def test_get_barcode_print_settings_defaults(self):
 		settings = get_barcode_print_settings()
@@ -533,8 +681,8 @@ class TestBarcodePrintManager(FrappeTestCase):
 		settings_doc.save(ignore_permissions=True)
 
 		item_code = self._create_test_item_with_barcode()
-		supplier = frappe.get_all("Supplier", limit=1)[0].name
-		company = frappe.get_all("Company", limit=1)[0].name
+		supplier = self._get_or_create_supplier()
+		company = self._get_or_create_company()
 		warehouse_row = frappe.get_all("Warehouse", filters={"company": company}, limit=1)
 		warehouse = (warehouse_row or frappe.get_all("Warehouse", limit=1))[0].name
 
@@ -658,8 +806,8 @@ class TestBarcodePrintManager(FrappeTestCase):
 		return item_code
 
 	def _create_purchase_order(self, item_rows):
-		supplier = frappe.get_all("Supplier", limit=1)[0].name
-		company = frappe.get_all("Company", limit=1)[0].name
+		supplier = self._get_or_create_supplier()
+		company = self._get_or_create_company()
 		warehouse_row = frappe.get_all("Warehouse", filters={"company": company}, limit=1)
 		warehouse = (warehouse_row or frappe.get_all("Warehouse", limit=1))[0].name
 
@@ -811,7 +959,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 				"serial_no": f"TEST-SN-{frappe.generate_hash(length=8)}",
 				"item_code": item_code,
 				"batch_no": batch_no,
-				"company": "_Test Company" if frappe.db.exists("Company", "_Test Company") else None,
+				"company": self._get_or_create_company(),
 				"status": "Active",
 			}).insert(ignore_permissions=True)
 			serials.append(serial.name)

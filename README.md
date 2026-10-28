@@ -4,16 +4,17 @@ Direct-to-printer **barcode label printing** for ERPNext, via QZ Tray or Zebra B
 
 You add items (or open it straight from a submitted Purchase Order/Purchase Receipt), pick a label size, and click Print — the label goes straight to a local thermal printer as raw ZPL. No print preview, no browser print dialog, no PDF step.
 
+## User Manual
+
+[![Download User Manual (PDF)](https://img.shields.io/badge/User%20Manual-Download%20PDF-0076DB?style=for-the-badge)](https://github.com/Rahul18-commit/ERPNext-Barcode-Printing/raw/main/docs/Barcodes_Print_User_Manual.pdf)
+
+Step-by-step guide to every screen and setting — [download the User Manual (PDF)](https://github.com/Rahul18-commit/ERPNext-Barcode-Printing/raw/main/docs/Barcodes_Print_User_Manual.pdf).
+
 ## Why this matters
 
 Standard ERPNext barcode printing means generating a print format, opening a browser print-preview screen, and sending it through the OS print dialog — slow for a warehouse doing this dozens of times a day, and it renders barcodes as an image rather than native printer commands, which prints noticeably softer/slower on thermal printers than the printer's own barcode engine. There's also no size-aware protection against printing an unscannable code (a QR code squeezed onto a tiny label with too many other fields on it will fail to scan in practice, not just in theory), and no record of who printed what, when, or how many — reprints for damaged labels happen with no trace and no limit.
 
 This app replaces all of that with a one-time-use print action: raw ZPL sent directly to the printer via a local desktop agent (QZ Tray, or Zebra Browser Print on Windows/macOS), label content and barcode bar width that scale to the label size you actually pick, a hard block on print combinations that would be too small to scan reliably, and an audit log of every print attempt — including failures and why.
-
-Two things worth knowing before relying on this:
-
-- **Not yet tested against a real physical printer.** Development and testing used QZ Tray's real desktop app talking to a CUPS virtual "print-to-file" queue, with each captured job rendered through [Labelary](http://labelary.com/viewer.html) to confirm it's correct — a real, working pipeline end to end, just never with actual ink on a physical label roll.
-- **The Zebra Browser Print connector is unverified on real hardware.** Zebra's Browser Print client has no public Linux build (Windows/macOS only, gated behind contacting a Zebra sales engineer for Linux), so it was built against its publicly documented JS API but has not been exercised against a live device. QZ Tray is the connector that's actually been proven working.
 
 ## What it does
 

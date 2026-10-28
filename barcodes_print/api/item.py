@@ -56,6 +56,7 @@ def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str 
 				"barcode": (b.barcode or "").strip(),
 				"barcode_type": (b.barcode_type or "").strip(),
 				"uom": (getattr(b, "uom", "") or "").strip(),
+				"default": cint(getattr(b, "custom_default", 0)),
 			}
 			for b in barcodes
 			if (b.barcode or "").strip()
@@ -75,6 +76,15 @@ def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str 
 			# caller has to ask the user which one they mean, rather than
 			# silently guessing the first row in the child table.
 			target_row = barcodes[0]
+
+		if not target_row and not barcode:
+			# Two or more barcodes, but exactly one is marked Default -
+			# use it instead of asking. (overrides.item.py blocks saving
+			# an Item with more than one Default, so this list is never
+			# longer than 1 in practice.)
+			default_rows = [b for b in barcodes if cint(getattr(b, "custom_default", 0))]
+			if len(default_rows) == 1:
+				target_row = default_rows[0]
 
 		if target_row:
 			details["barcode"] = (target_row.barcode or "").strip()

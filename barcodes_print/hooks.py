@@ -31,6 +31,12 @@ app_include_js = [
 # here would break `bench build` for the whole site, so add it above
 # (before zebra_browser_print.js) only once the real file is in place.
 
+doc_events = {
+	"Item": {
+		"validate": "barcodes_print.overrides.item.validate_single_default_barcode",
+	}
+}
+
 doctype_js = {
 	# Purchase Order/Purchase Receipt/Subcontracting Order are core ERPNext
 	# doctypes this app doesn't own - a real committed file via doctype_js,

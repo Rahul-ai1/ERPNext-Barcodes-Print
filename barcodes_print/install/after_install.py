@@ -63,6 +63,7 @@ def after_install():
 	sync_standard_files()
 	seed_barcode_print_settings()
 	ensure_item_barcode_types()
+	ensure_item_barcode_default_field()
 	ensure_purchase_barcode_tracking_fields()
 	ensure_display_rules()
 
@@ -71,6 +72,7 @@ def after_migrate():
 	sync_standard_files()
 	seed_barcode_print_settings()
 	ensure_item_barcode_types()
+	ensure_item_barcode_default_field()
 	ensure_purchase_barcode_tracking_fields()
 	ensure_display_rules()
 
@@ -146,6 +148,30 @@ def ensure_item_barcode_types():
 			"Text",
 			validate_fields_for_doctype=False,
 		)
+
+
+def ensure_item_barcode_default_field():
+	"""Adds the 'Default' checkbox used by the Print Barcode page to
+	auto-select a barcode when an item has more than one (see
+	overrides.item.validate_single_default_barcode for the exclusivity
+	check - this only creates the field, no backfill)."""
+	if not frappe.db.exists("DocType", "Item Barcode"):
+		return
+	if frappe.db.exists("Custom Field", {"dt": "Item Barcode", "fieldname": "custom_default"}):
+		return
+
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	create_custom_field(
+		"Item Barcode",
+		{
+			"fieldname": "custom_default",
+			"label": "Default",
+			"fieldtype": "Check",
+			"insert_after": "barcode_type",
+			"description": "Only one barcode per item can be marked Default. Used by Barcodes Print to auto-select a barcode when an item has more than one.",
+		},
+	)
 
 
 def ensure_purchase_barcode_tracking_fields():
