@@ -6,9 +6,9 @@ You add items (or open it straight from a submitted Purchase Order/Purchase Rece
 
 ## User Manual
 
-[![Download User Manual (PDF)](https://img.shields.io/badge/User%20Manual-Download%20PDF-0076DB?style=for-the-badge)](https://github.com/Rahul18-commit/ERPNext-Barcode-Printing/raw/main/docs/Barcodes_Print_User_Manual.pdf)
+[![Download User Manual (PDF)](https://img.shields.io/badge/User%20Manual-Download%20PDF-0076DB?style=for-the-badge)](https://github.com/Rahul18-commit/ERPNext-Barcode-Label-Printing/raw/main/docs/Barcodes_Print_User_Manual.pdf)
 
-Step-by-step guide to every screen and setting — [download the User Manual (PDF)](https://github.com/Rahul18-commit/ERPNext-Barcode-Printing/raw/main/docs/Barcodes_Print_User_Manual.pdf).
+Step-by-step guide to every screen and setting — [download the User Manual (PDF)](https://github.com/Rahul18-commit/ERPNext-Barcode-Label-Printing/raw/main/docs/Barcodes_Print_User_Manual.pdf).
 
 ## Why this matters
 
@@ -83,7 +83,7 @@ Built and tested against **Frappe v16.26 / ERPNext v16.26**. Installs cleanly on
 ## Install
 
 ```bash
-bench get-app https://github.com/Rahul-ai1/ERPNext-Barcodes-Print.git
+bench get-app https://github.com/Rahul18-commit/ERPNext-Barcode-Label-Printing.git
 bench --site <your-site> install-app barcodes_print
 bench --site <your-site> migrate
 bench restart
