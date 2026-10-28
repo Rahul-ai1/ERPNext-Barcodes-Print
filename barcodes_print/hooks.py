@@ -4,6 +4,10 @@ app_publisher = "Rahul Chaudhary"
 app_description = "Generate and print barcode labels for thermal barcode printers"
 app_email = "rc1248117@outlook.com"
 app_license = "MIT"
+# Read by frappe.utils.app_logo() for the app's own mark in the dock rail and
+# a dock-less sidebar's header - without this it falls back to a plain
+# letter avatar, regardless of the Dock/Sidebar fixtures' own icon fields.
+app_logo_url = "/assets/barcodes_print/icons/desktop_icons/subtle/barcodes_print.svg"
 required_apps = ["erpnext"]
 
 after_install = "barcodes_print.install.after_install.after_install"
