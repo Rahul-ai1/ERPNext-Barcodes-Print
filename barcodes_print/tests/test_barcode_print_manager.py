@@ -24,6 +24,7 @@ from barcodes_print.api.item import (
 )
 from barcodes_print.api.printer import get_my_default_printer, set_my_default_printer
 from barcodes_print.api.zpl import (
+	_format_price_line,
 	_get_batch_serial_map,
 	build_label_zpl,
 	get_label_dimensions_dots,
@@ -937,6 +938,53 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertIn("220.00 (Incl. of taxes)", zpl)
 		self.assertNotIn("10%", zpl)
 		self.assertNotIn("Company", zpl)
+
+	# ---- Feature: Print Price As Rate/MRP (barcodes_print.api.zpl) ----
+
+	def test_format_price_line_rate_is_unchanged_from_before_this_feature(self):
+		"""Default "Rate" setting must reproduce exactly what this app always
+		printed - no prefix word - so nobody upgrading sees a changed label."""
+		money = frappe.utils.fmt_money(220)
+		self.assertEqual(_format_price_line(220, "Incl. of taxes", "Rate"), f"{money} (Incl. of taxes)")
+		self.assertEqual(_format_price_line(220, "", "Rate"), money)
+
+	def test_format_price_line_mrp_adds_prefix(self):
+		money = frappe.utils.fmt_money(220)
+		self.assertEqual(_format_price_line(220, "Incl. of taxes", "MRP"), f"MRP: {money} (Incl. of taxes)")
+		self.assertEqual(_format_price_line(220, "Excl. of taxes", "MRP"), f"MRP: {money} (Excl. of taxes)")
+
+	def test_build_label_zpl_prints_mrp_prefix_when_settings_say_so(self):
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Medium"]["show_rate"] = 1
+		settings["price_label"] = "MRP"
+
+		row = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X",
+			barcode="ABC123", barcode_type="CODE-39", uom="Nos",
+			rate=220, price_note="Incl. of taxes",
+		)
+		zpl = build_label_zpl(row, settings, "Medium")
+		self.assertIn("MRP:", zpl)
+		self.assertIn("220.00 (Incl. of taxes)", zpl)
+
+	def test_build_label_zpl_prints_mrp_even_without_a_tax_template(self):
+		"""MRP wording is not gated on whether the row actually has a Tax
+		Template - it follows the Settings choice regardless (approved
+		decision: no forced validation)."""
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Medium"]["show_rate"] = 1
+		settings["price_label"] = "MRP"
+
+		row = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X",
+			barcode="ABC123", barcode_type="CODE-39", uom="Nos",
+			rate=150, price_note="Excl. of taxes",
+		)
+		zpl = build_label_zpl(row, settings, "Medium")
+		self.assertIn("MRP: " + frappe.utils.fmt_money(150) + " (Excl. of taxes)", zpl)
+
+	def test_get_barcode_print_settings_defaults_price_label_to_rate(self):
+		self.assertEqual(get_barcode_print_settings()["price_label"], "Rate")
 
 	def test_get_purchase_document_items_fetches_company_and_tax_template_per_line(self):
 		"""Company/Tax Template are auto-fetched straight from the Purchase

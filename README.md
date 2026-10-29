@@ -31,21 +31,29 @@ If an Item has more than one barcode registered, you're asked which one to use r
 
 **My Printer.** Each user can save their own default printer from a live dropdown of whatever QZ Tray/Zebra Browser Print currently sees connected — it's remembered per user (not per browser/site), and wins over the site-wide Default Label Printer whenever it's set.
 
-![Print Barcode page with two items queued](docs/screenshots/print_barcode.png)
+**Scan Barcode.** A dedicated scan box fills or updates a row the moment you scan — a barcode, Serial No, or Batch No (or just type an Item Code), the same way ERPNext's own scan fields work everywhere else. Works with an external USB/Bluetooth scanner (no Enter keystroke required — it commits automatically a moment after scanning/typing stops) and with a device's own camera via the built-in scan icon, for anyone without external scanner hardware. Scanning the same plain item again increments its row instead of adding a duplicate; a batch-tracked item matches by item **and** batch (a different batch gets its own row); a serial-tracked item's repeat scan adds the new serial to that row's list.
+
+**Load from Excel/CSV.** Bulk-fill the grid from a spreadsheet instead of adding rows one at a time — **Download Template** exports the grid's current rows as a starting point, **Load from File** reads an `.xlsx`/`.xls`/`.csv` back in, validating each row independently (bad rows are skipped and listed, never a whole-file failure) with a 1,000-row cap.
+
+![Print Barcode page with items queued](docs/screenshots/print_barcode.png)
+
+**Stock Qty.** A read-only, informational column shows each row's on-hand quantity (scoped to the picked Batch No, where relevant) — never printed on the label, just a courtesy figure before deciding how many to print. Blank for service/non-stock items.
+
+**"Label Only" sizes.** For an Item that genuinely has no barcode, three extra size choices — Small/Medium/Large **Label Only** — print a clean text-only label (Item Name, Code, UOM, Rate) with no barcode field at all. This is a deliberate, explicit choice: the regular Small/Medium/Large sizes are completely unaffected and still require a real barcode.
 
 **Batch No / Serial No.** For batch- or serial-tracked items, pick (or scan) the exact Batch No/Serial No a label run is for — the label's own barcode then encodes that Batch/Serial directly, so scanning it anywhere in ERPNext resolves the Item (and Batch, for a Serial No) automatically. One label prints per Serial No selected. Whether this is offered at all is a single site-wide switch (Both/Batch Only/Serial Only/Neither in Settings); whether the resolved Batch/Serial text actually appears on the printed label is a separate, per-size choice — the two are independent on purpose, so a company can encode Batch/Serial into every label's barcode while only showing the text on the larger sizes, for example.
 
-**Purchase Order / Purchase Receipt integration (optional, off by default).** Turn it on in Settings and pick exactly one of the two document types — a **Print Barcode** button then appears on submitted documents of that type, pre-filling the page with that document's items, including each line's own Batch No/Serial No, Company, and Tax Template straight from the document (both the legacy `use_serial_batch_fields` mode and the default Serial and Batch Bundle mode are handled). Each line's starting quantity defaults to whatever's still allowed (line quantity + a configurable number of extras, minus what's already been printed for that line), and a per-line **Barcodes Printed** counter tracks the running total. The limit is re-checked against the database on every print — a user can't bypass it by editing the request.
+**Purchase Order / Purchase Receipt / Purchase Invoice integration (optional, off by default).** Turn it on in Settings and pick exactly one of the three document types — a **Print Barcode** button then appears on submitted documents of that type, pre-filling the page with that document's items, including each line's own Batch No/Serial No, Company, and Tax Template straight from the document (both the legacy `use_serial_batch_fields` mode and the default Serial and Batch Bundle mode are handled). A Return (credit note) Purchase Invoice never gets the button. Each line's starting quantity defaults to whatever's still allowed (line quantity + a configurable number of extras, minus what's already been printed for that line), and a per-line **Barcodes Printed** counter tracks the running total. The limit is re-checked against the database on every print — a user can't bypass it by editing the request.
 
-**Rate, with or without tax.** The Rate line is pulled from a Price List (never `Item.standard_rate`) and left off the label entirely if no price is found for that Item/Price List — never a misleading "0.00" or "N/A". Optionally pick a Company and Tax Template on a row (auto-filled from your own default Company, or straight from the Purchase Order/Receipt line when printing from one) and the Rate is marked up by that template's own tax % before printing, with a short **"Incl. of taxes"** note next to it; leave Tax Template blank and it prints the plain Price List rate marked **"Excl. of taxes"**. The tax percentage and the Company/template name are never printed — only the final Rate and that one-line note.
+**Rate, with or without tax.** The Rate line is pulled from a Price List (never `Item.standard_rate`) and left off the label entirely if no price is found for that Item/Price List — never a misleading "0.00" or "N/A". Optionally pick a Company and Tax Template on a row (auto-filled from your own default Company, or straight from the Purchase Order/Receipt line when printing from one) and the Rate is marked up by that template's own tax % before printing, with a short **"Incl. of taxes"** note next to it; leave Tax Template blank and it prints the plain Price List rate marked **"Excl. of taxes"**. The tax percentage and the Company/template name are never printed — only the final Rate and that one-line note. A site-wide **Print Price As** setting (Rate/MRP) optionally prefixes that line with **"MRP: "** instead — off by default, so existing installs see no change.
 
 **Barcode Print Settings.** One screen controls everything:
 - **Print Connector** — QZ Tray or Zebra Browser Print, one at a time, plus the default printer name and printer DPI.
 - **Label Dimensions (mm)** — width/height for Small, Medium, and Large.
 - **Batch/Serial Printing** — site-wide: Both / Batch Only / Serial Only / Neither.
-- **Display Rules** — a table with one row per label size: independent show/hide checkboxes (Item Name, Item Code, Barcode Number, Barcode Type, UOM, Rate, Batch No, Serial No) and a Left/Center/Right alignment, per size. A field can be off for Small but on for Medium/Large.
+- **Display Rules** — a table with one row per label size (Small/Medium/Large, plus their three **Label Only** variants): independent show/hide checkboxes and a Left/Center/Right alignment, per size. A field can be off for Small but on for Medium/Large.
 - **Default Price List** — used to auto-fetch each row's Rate when Display Rules show it; overridable per row.
-- **Purchase Document Printing** — the enable flag, which document type, and the extra-barcodes allowance described above.
+- **Purchase Document Printing** — the enable flag, which of the three document types, and the extra-barcodes allowance described above.
 
 ![Barcode Print Settings](docs/screenshots/settings.png)
 
@@ -62,7 +70,7 @@ If an Item has more than one barcode registered, you're asked which one to use r
 | Doctype | Type | Purpose |
 |---|---|---|
 | Barcode Print Settings | Single | Central configuration — the only doctype with one record per site. |
-| Barcode Label Display Rule | Child table | One row per label size (Small/Medium/Large): display toggles + alignment. |
+| Barcode Label Display Rule | Child table | One row per label size (Small/Medium/Large, plus 3 "Label Only" variants): display toggles + alignment. |
 | Print Label Item | Child table | Row schema for the Print Barcode page's item grid — not a persisted business record. Includes Batch No, Serial Nos, Company, and Tax Template. |
 | Barcode Print Log | Standalone | Audit trail of every print attempt, success or failure. |
 

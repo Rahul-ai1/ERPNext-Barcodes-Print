@@ -159,6 +159,14 @@
    "options": "Price List"
   },
   {
+   "default": "Rate",
+   "description": "Rate prints exactly as before (no prefix word, just the number). MRP prefixes the line with \"MRP: \" - applies to every label size, regardless of whether a Tax Template is set.",
+   "fieldname": "price_label",
+   "fieldtype": "Select",
+   "label": "Print Price As",
+   "options": "Rate\nMRP"
+  },
+  {
    "fieldname": "purchase_section",
    "fieldtype": "Section Break",
    "label": "Purchase Document Printing"
@@ -211,7 +219,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-29 14:11:50.407428",
+ "modified": "2026-10-29 16:00:10.101548",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",

@@ -7,8 +7,22 @@ app_license = "MIT"
 # Read by frappe.utils.app_logo() for the app's own mark in the dock rail and
 # a dock-less sidebar's header - without this it falls back to a plain
 # letter avatar, regardless of the Dock/Sidebar fixtures' own icon fields.
-app_logo_url = "/assets/barcodes_print/icons/desktop_icons/subtle/barcodes_print.svg"
+# "?v=1" makes browsers fetch the logo again after it changes (assets are
+# otherwise cached for a year).
+app_logo_url = "/assets/barcodes_print/icons/desktop_icons/subtle/barcodes_print.svg?v=1"
+app_home = "/app/barcodes-print"
 required_apps = ["erpnext"]
+
+# Without this, the app never appears on the /apps switcher page at all -
+# not a broken icon there, it's simply absent from the list of tiles.
+add_to_apps_screen = [
+	{
+		"name": app_name,
+		"logo": app_logo_url,
+		"title": app_title,
+		"route": app_home,
+	}
+]
 
 after_install = "barcodes_print.install.after_install.after_install"
 after_migrate = "barcodes_print.install.after_install.after_migrate"
