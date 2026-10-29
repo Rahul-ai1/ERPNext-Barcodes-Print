@@ -381,7 +381,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 	page.main.empty();
 
 	const $wrapper = $('<div class="print-barcode-page">')
-		.css({ "max-width": "1000px", margin: "0 auto", "padding-top": "10px" })
+		.css({ "max-width": "1400px", margin: "0 auto", "padding-top": "10px" })
 		.appendTo(page.main);
 
 	const $source_banner = $("<div>").appendTo($wrapper);
@@ -391,11 +391,14 @@ barcodes_print.print_barcode_page.render = function (page) {
 	)}</p>`).appendTo($wrapper);
 
 	const $scan_area = $('<div style="margin-bottom: 10px; max-width: 320px;">').appendTo($wrapper);
-	const $import_area = $('<div style="margin-bottom: 10px;">').appendTo($wrapper);
+	const $import_area = $('<div style="margin-bottom: 15px;">').appendTo($wrapper);
+	// Label Size and My Printer sit above the item grid - both are chosen
+	// once per print run, not per row, so they read more naturally as
+	// setup before the table than as an afterthought below it.
+	const $size_area = $('<div style="max-width: 200px; margin-bottom: 10px;">').appendTo($wrapper);
+	const $printer_area = $('<div class="text-muted" style="margin-bottom: 15px; font-size: 13px;">').appendTo($wrapper);
 	const $items_area = $('<div style="margin-bottom: 10px;">').appendTo($wrapper);
 	const $total_area = $('<div class="text-muted" style="margin-bottom: 20px; font-size: 13px;">').appendTo($wrapper);
-	const $size_area = $('<div style="max-width: 200px;">').appendTo($wrapper);
-	const $printer_area = $('<div class="text-muted" style="margin-top: 10px; font-size: 13px;">').appendTo($wrapper);
 
 	// The Price List column's per-row default needs Barcode Print
 	// Settings' Default Price List up front, so the grid itself isn't
@@ -554,21 +557,32 @@ barcodes_print.print_barcode_page.IMPORT_TEMPLATE_COLUMNS = [
 	"item_code", "barcode", "no_of_barcodes", "price_list", "company", "tax_template", "batch_no", "serial_nos",
 ];
 
+// Styled as real buttons, matching the native Frappe grid's own
+// Download/Upload bulk-edit buttons (see frappe/public/js/frappe/form/grid.js
+// setup_allow_bulk_edit/setup_download) - that native mechanism itself can't
+// be reused here, since it requires a real bound frm (this grid is a
+// standalone control with nothing saved as a document), so this wires the
+// same visual button component to this app's own import/export endpoints.
 barcodes_print.print_barcode_page.render_import_export = function () {
 	const state = barcodes_print.print_barcode_page._state;
 	state.$import_area.empty();
-	$(`<a href="#" style="margin-right: 14px;">${__("Load from File")}</a>`)
-		.appendTo(state.$import_area)
-		.on("click", (e) => {
-			e.preventDefault();
-			barcodes_print.print_barcode_page.prompt_import_file();
-		});
-	$(`<a href="#">${__("Download Template")}</a>`)
-		.appendTo(state.$import_area)
-		.on("click", (e) => {
-			e.preventDefault();
-			barcodes_print.print_barcode_page.download_import_template();
-		});
+	frappe.ui
+		.button({
+			label: __("Load from File"),
+			icon: "upload",
+			variant: "outline",
+			onclick: () => barcodes_print.print_barcode_page.prompt_import_file(),
+		})
+		.css("margin-right", "8px")
+		.appendTo(state.$import_area);
+	frappe.ui
+		.button({
+			label: __("Download Template"),
+			icon: "download",
+			variant: "outline",
+			onclick: () => barcodes_print.print_barcode_page.download_import_template(),
+		})
+		.appendTo(state.$import_area);
 };
 
 barcodes_print.print_barcode_page.prompt_import_file = function () {
