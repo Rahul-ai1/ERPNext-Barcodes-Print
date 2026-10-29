@@ -290,6 +290,13 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 		});
 	}
 
+	// A plain Column Break has no in_list_view, so it never becomes a
+	// column in the main flat grid table - it only takes effect in each
+	// row's own expanded single-row view (the pencil/expand icon), which
+	// otherwise stacks every field in one long column. Splits item/barcode
+	// identity (left) from quantity/pricing (right).
+	fields.push({ fieldtype: "Column Break" });
+
 	fields.push(
 		{
 			fieldname: "no_of_barcodes",
