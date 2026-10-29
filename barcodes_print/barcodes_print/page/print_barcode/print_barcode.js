@@ -700,7 +700,21 @@ barcodes_print.print_barcode_page.download_import_template = function () {
 		const s = v === null || v === undefined ? "" : String(v);
 		return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 	};
-	const lines = [cols.join(",")];
+	// Same instructional preamble shape as Frappe's own native grid bulk-edit
+	// download (grid.js setup_download) - title, blank line, two warnings,
+	// a separator - before the real header row. api.import_items.py's own
+	// parser finds the real header row by content (the first row with a
+	// recognized column name), not by a fixed row count, so this preamble
+	// is skipped automatically on re-upload and a plain hand-written file
+	// with no preamble at all still works unmodified.
+	const preamble = [
+		[__("Barcode Print - Bulk Item Template")],
+		[],
+		[__("The CSV format is case sensitive")],
+		[__("Do not edit the header row below")],
+		["------"],
+	];
+	const lines = [...preamble.map((r) => r.map(csv_escape).join(",")), cols.join(",")];
 	rows.forEach((row) => {
 		lines.push(cols.map((c) => csv_escape(row[field_for_col[c]])).join(","));
 	});

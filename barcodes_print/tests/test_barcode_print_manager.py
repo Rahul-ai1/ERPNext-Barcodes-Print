@@ -1866,3 +1866,25 @@ class TestBarcodePrintManager(FrappeTestCase):
 		result = import_items_from_file(file_url)
 		self.assertEqual(len(result["rows"]), 1)
 		self.assertEqual(result["errors"], [])
+
+	def test_import_items_from_file_skips_downloaded_template_preamble(self):
+		"""The Download Template button writes an instructional preamble
+		(title, warnings, a "------" line) before the real header row,
+		matching Frappe's own native grid bulk-edit download - re-uploading
+		that exact file must find the real header by content, not assume
+		row 1 is it."""
+		item_code = self._create_test_item_with_barcode()
+		file_url = self._create_csv_file([
+			["Barcode Print - Bulk Item Template"],
+			[],
+			["The CSV format is case sensitive"],
+			["Do not edit the header row below"],
+			["------"],
+			["item_code", "qty"],
+			[item_code, 4],
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(result["errors"], [])
+		self.assertEqual(len(result["rows"]), 1)
+		self.assertEqual(result["rows"][0]["item"], item_code)
+		self.assertEqual(result["rows"][0]["no_of_barcodes"], 4)

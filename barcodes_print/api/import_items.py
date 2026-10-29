@@ -71,15 +71,31 @@ def _read_rows_from_file(file_url: str) -> list:
 	return read_xlsx_file_from_attached_file(file_url=file_url) or []
 
 
+def _find_header_row_index(raw_rows: list) -> int:
+	"""The first row with at least one cell matching a known column name -
+	the real header row. The Download Template button (print_barcode.js)
+	writes an instructional preamble (title, warnings, a "------" line)
+	before it, same idea as Frappe's own native grid bulk-edit download, so
+	this skips that preamble on re-upload by content rather than a fixed
+	row count - and a plain hand-written file with no preamble at all
+	still works unmodified, since its header row is simply found at index 0."""
+	for i, row in enumerate(raw_rows):
+		normalized = {_normalize_header(cell) for cell in row}
+		if normalized & set(_HEADER_SYNONYMS):
+			return i
+	return 0
+
+
 def _rows_to_dicts(raw_rows: list) -> list:
-	"""First row is headers; every later row becomes a dict keyed by the
+	"""Every row after the real header row becomes a dict keyed by the
 	canonical field names in _HEADER_SYNONYMS. An unrecognized header
 	column is kept under its own normalized name but never consulted."""
 	if not raw_rows:
 		return []
-	header_keys = [_HEADER_SYNONYMS.get(_normalize_header(h), _normalize_header(h)) for h in raw_rows[0]]
+	header_idx = _find_header_row_index(raw_rows)
+	header_keys = [_HEADER_SYNONYMS.get(_normalize_header(h), _normalize_header(h)) for h in raw_rows[header_idx]]
 	dicts = []
-	for raw_row in raw_rows[1:]:
+	for raw_row in raw_rows[header_idx + 1:]:
 		if not any(cell not in (None, "") for cell in raw_row):
 			continue  # skip a fully blank row rather than reporting it as an error
 		dicts.append({key: raw_row[i] if i < len(raw_row) else None for i, key in enumerate(header_keys)})
