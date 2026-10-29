@@ -11,6 +11,7 @@ from barcodes_print.api.barcode import (
 	get_barcode_print_settings,
 	is_label_only_size,
 	validate_barcode_compatibility,
+	validate_two_column_widths,
 )
 from barcodes_print.api.import_items import import_items_from_file
 from barcodes_print.api.item import (
@@ -26,6 +27,9 @@ from barcodes_print.api.printer import get_my_default_printer, set_my_default_pr
 from barcodes_print.api.zpl import (
 	_format_price_line,
 	_get_batch_serial_map,
+	_split_into_columns,
+	_truncate_to_column_width,
+	_zpl_safe_money,
 	build_label_zpl,
 	get_label_dimensions_dots,
 	get_purchase_document_items,
@@ -915,13 +919,17 @@ class TestBarcodePrintManager(FrappeTestCase):
 				"price_list_rate": 200,
 			}).insert(ignore_permissions=True)
 
-		rate, note = get_item_rate_and_note(item_code, price_list, "")
+		expected_currency = frappe.db.get_value("Price List", price_list, "currency")
+
+		rate, note, currency = get_item_rate_and_note(item_code, price_list, "")
 		self.assertEqual(rate, 200)
 		self.assertEqual(note, "Excl. of taxes")
+		self.assertEqual(currency, expected_currency)
 
-		rate, note = get_item_rate_and_note(item_code, price_list, template.name)
+		rate, note, currency = get_item_rate_and_note(item_code, price_list, template.name)
 		self.assertAlmostEqual(rate, 220)
 		self.assertEqual(note, "Incl. of taxes")
+		self.assertEqual(currency, expected_currency)
 
 	def test_build_label_zpl_never_prints_tax_percent_or_company(self):
 		"""The label shows the final Rate and a short Incl./Excl. note -
@@ -982,6 +990,84 @@ class TestBarcodePrintManager(FrappeTestCase):
 		)
 		zpl = build_label_zpl(row, settings, "Medium")
 		self.assertIn("MRP: " + frappe.utils.fmt_money(150) + " (Excl. of taxes)", zpl)
+
+	# ---- Feature: Price line currency symbol (barcodes_print.api.zpl) ----
+
+	def test_format_price_line_blank_currency_is_unchanged_from_before_this_feature(self):
+		"""No currency (the default, "" or None) must reproduce exactly what
+		this app always printed - a bare number, no symbol."""
+		self.assertEqual(_format_price_line(220, "", "Rate", ""), frappe.utils.fmt_money(220))
+		self.assertEqual(_format_price_line(220, "", "Rate"), frappe.utils.fmt_money(220))
+
+	def test_format_price_line_prefixes_an_ascii_currency_symbol(self):
+		"""USD's "$" is plain ASCII - a real Zebra printer can print it, so
+		it's used as-is via fmt_money's own formatting."""
+		self.assertEqual(
+			_format_price_line(2500, "Excl. of taxes", "Rate", "USD"),
+			f"{frappe.utils.fmt_money(2500, currency='USD')} (Excl. of taxes)",
+		)
+
+	def test_format_price_line_falls_back_to_iso_code_for_a_non_ascii_symbol(self):
+		"""INR's "₹" prints as blank space on a real Zebra printer (confirmed
+		via Labelary during this feature's own verification) - the 3-letter
+		ISO code is printed instead, which every Zebra font can render."""
+		self.assertEqual(
+			_format_price_line(2500, "Excl. of taxes", "Rate", "INR"),
+			f"INR {frappe.utils.fmt_money(2500)} (Excl. of taxes)",
+		)
+
+	def test_format_price_line_currency_combines_with_mrp_prefix(self):
+		self.assertEqual(
+			_format_price_line(2500, "Incl. of taxes", "MRP", "INR"),
+			f"MRP: INR {frappe.utils.fmt_money(2500)} (Incl. of taxes)",
+		)
+
+	def test_zpl_safe_money_falls_back_to_iso_code_for_non_ascii_symbols(self):
+		for code in ("INR", "EUR", "GBP", "JPY"):
+			self.assertEqual(_zpl_safe_money(100, code), f"{code} {frappe.utils.fmt_money(100)}")
+
+	def test_zpl_safe_money_keeps_an_ascii_symbol(self):
+		self.assertEqual(_zpl_safe_money(100, "USD"), frappe.utils.fmt_money(100, currency="USD"))
+
+	def test_zpl_safe_money_blank_currency_is_a_bare_number(self):
+		self.assertEqual(_zpl_safe_money(100, ""), frappe.utils.fmt_money(100))
+
+	def test_get_item_rate_and_note_returns_blank_currency_when_no_price_found(self):
+		rate, note, currency = get_item_rate_and_note("NONEXISTENT-ITEM-XYZ", "", "")
+		self.assertIsNone(rate)
+		self.assertEqual(note, "")
+		self.assertEqual(currency, "")
+
+	def test_build_label_zpl_prints_currency_symbol_from_the_price_list(self):
+		"""End-to-end: resolve_row/get_item_barcode_details carry the Price
+		List's own currency through to the printed line - confirmed against
+		a real USD Price List, not the site's own default currency."""
+		item_code = self._create_test_item_with_barcode()
+		price_list = frappe.get_doc({
+			"doctype": "Price List",
+			"price_list_name": "_Test USD Price List",
+			"selling": 1,
+			"currency": "USD",
+		}).insert(ignore_permissions=True).name
+		frappe.get_doc({
+			"doctype": "Item Price",
+			"item_code": item_code,
+			"price_list": price_list,
+			"price_list_rate": 99,
+		}).insert(ignore_permissions=True)
+
+		try:
+			details = get_item_barcode_details(item_code, price_list=price_list)
+			self.assertEqual(details["currency"], "USD")
+
+			settings = get_barcode_print_settings()
+			settings["display_rules"]["Medium"]["show_rate"] = 1
+			row = resolve_row(item_code, price_list=price_list, size="Medium")
+			zpl = build_label_zpl(row, settings, "Medium")
+			self.assertIn(frappe.utils.fmt_money(99, currency="USD"), zpl)
+		finally:
+			frappe.db.delete("Item Price", {"price_list": price_list})
+			frappe.delete_doc("Price List", price_list, force=True, ignore_permissions=True)
 
 	def test_get_barcode_print_settings_defaults_price_label_to_rate(self):
 		self.assertEqual(get_barcode_print_settings()["price_label"], "Rate")
@@ -1936,3 +2022,133 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertEqual(len(result["rows"]), 1)
 		self.assertEqual(result["rows"][0]["item"], item_code)
 		self.assertEqual(result["rows"][0]["no_of_barcodes"], 4)
+
+	# ---- Feature: Multi-column label layout (barcodes_print.api.zpl) ----
+
+	def test_split_into_columns_even_split(self):
+		self.assertEqual(_split_into_columns(["a", "b", "c", "d"]), [["a", "b"], ["c", "d"]])
+
+	def test_split_into_columns_odd_split_favors_first_column(self):
+		self.assertEqual(_split_into_columns(["a", "b", "c"]), [["a", "b"], ["c"]])
+
+	def test_split_into_columns_single_column_is_a_no_op(self):
+		self.assertEqual(_split_into_columns(["a", "b"], columns=1), [["a", "b"]])
+
+	def test_split_into_columns_empty_list(self):
+		self.assertEqual(_split_into_columns([]), [[]])
+
+	def test_truncate_to_column_width_leaves_short_text_unchanged(self):
+		self.assertEqual(_truncate_to_column_width("Nos", 500, 26), "Nos")
+
+	def test_truncate_to_column_width_adds_ellipsis_when_too_long(self):
+		"""A line as long as the Rate's own "MRP: 249.50 (Incl. of taxes)"
+		note can overflow a 2-column label's half-width - this is the guard
+		that keeps it a clean single line instead of ^FB's own overlapping/
+		garbled overflow rendering (confirmed visually via Labelary during
+		this feature's own verification)."""
+		long_text = "MRP: 249.50 (Incl. of taxes)"
+		truncated = _truncate_to_column_width(long_text, 100, 26)
+		self.assertTrue(truncated.endswith("…"))
+		self.assertLess(len(truncated), len(long_text))
+
+	def test_get_barcode_print_settings_defaults_columns_to_1(self):
+		settings = get_barcode_print_settings()
+		for size in settings["display_rules"]:
+			self.assertEqual(settings["display_rules"][size]["columns"], 1)
+
+	def test_build_label_zpl_single_column_never_places_two_fields_at_the_same_y(self):
+		"""Regression guard: columns=1 (the default) must keep stacking every
+		field vertically, exactly as this app always has - no two fields may
+		ever land at the same y position, which is what a column split would
+		do."""
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Medium"]["show_rate"] = 1
+		row = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X",
+			barcode="ABC123", barcode_type="CODE-39", uom="Nos",
+			rate=220, price_note="Incl. of taxes",
+		)
+		zpl = build_label_zpl(row, settings, "Medium")
+		y_positions = re.findall(r"\^FO\d+,(\d+)\^FB", zpl)
+		self.assertEqual(len(y_positions), len(set(y_positions)))
+
+	def test_build_label_zpl_two_columns_places_two_text_fields_at_the_same_y(self):
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Medium"]["columns"] = 2
+		settings["display_rules"]["Medium"]["show_rate"] = 1
+		row = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X",
+			barcode="ABC123", barcode_type="CODE-39", uom="Nos",
+			rate=220, price_note="Incl. of taxes",
+		)
+		zpl = build_label_zpl(row, settings, "Medium")
+		y_positions = re.findall(r"\^FO\d+,(\d+)\^FB", zpl)
+		self.assertGreater(len(y_positions), len(set(y_positions)))
+
+	def test_build_label_zpl_two_columns_keeps_barcode_full_width_at_top(self):
+		"""The barcode graphic must always stay full-width, printed before
+		(above) any of the 2-column text fields - never shrunk or split into
+		a column itself."""
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Medium"]["columns"] = 2
+		row = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X",
+			barcode="ABC123", barcode_type="CODE-39", uom="Nos",
+			rate=None, price_note="",
+		)
+		zpl = build_label_zpl(row, settings, "Medium")
+		lines = zpl.splitlines()
+		barcode_idx = next(i for i, line in enumerate(lines) if line.startswith("^B"))
+		first_text_field_idx = next(i for i, line in enumerate(lines) if "^FB" in line)
+		self.assertLess(barcode_idx, first_text_field_idx)
+
+	def test_build_label_only_zpl_two_columns_places_two_fields_at_the_same_y(self):
+		"""Label Only sizes (no barcode at all) split the same way - just
+		with no barcode/height-budget consideration."""
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Medium Label Only"]["columns"] = 2
+		settings["display_rules"]["Medium Label Only"]["show_rate"] = 1
+		row = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X", uom="Nos",
+			rate=220, price_note="Incl. of taxes",
+		)
+		zpl = build_label_zpl(row, settings, "Medium Label Only")
+		y_positions = re.findall(r"\^FO\d+,(\d+)\^FB", zpl)
+		self.assertGreater(len(y_positions), len(set(y_positions)))
+
+	def test_validate_two_column_widths_blocks_too_narrow_size(self):
+		doc = frappe._dict(
+			small_width_mm=30,
+			display_rules=[frappe._dict(label_size="Small", columns=2)],
+		)
+		with self.assertRaises(frappe.ValidationError):
+			validate_two_column_widths(doc)
+
+	def test_validate_two_column_widths_allows_wide_enough_size(self):
+		doc = frappe._dict(
+			medium_width_mm=75,
+			display_rules=[frappe._dict(label_size="Medium", columns=2)],
+		)
+		validate_two_column_widths(doc)  # must not raise
+
+	def test_validate_two_column_widths_ignores_single_column_rows(self):
+		"""A row left at 1 column is never checked against the width floor,
+		however narrow its label is - the floor only matters once 2 columns
+		are actually requested."""
+		doc = frappe._dict(
+			small_width_mm=10,
+			display_rules=[frappe._dict(label_size="Small", columns=1)],
+		)
+		validate_two_column_widths(doc)  # must not raise
+
+	def test_validate_two_column_widths_checks_label_only_against_its_base_size(self):
+		"""A "Small Label Only" row has no Label Dimensions of its own - it
+		reuses the real Small size's width (see api.barcode.base_size_of),
+		so the floor must be checked against small_width_mm, not a
+		nonexistent field."""
+		doc = frappe._dict(
+			small_width_mm=30,
+			display_rules=[frappe._dict(label_size="Small Label Only", columns=2)],
+		)
+		with self.assertRaises(frappe.ValidationError):
+			validate_two_column_widths(doc)
