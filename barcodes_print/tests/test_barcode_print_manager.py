@@ -666,6 +666,27 @@ class TestBarcodePrintManager(FrappeTestCase):
 		# margin (12 dots at 203 DPI for the 1.5mm margin), not shifted.
 		self.assertIn("^FO12,", zpl)
 
+	def test_rate_line_omitted_entirely_when_no_price_found(self):
+		"""show_rate=1 but no price found (rate=None) - the Rate line is
+		left off the label entirely, never printed as "N/A" or "0.00"."""
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Medium"]["show_rate"] = 1
+
+		row_no_price = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X",
+			barcode="ABC123", barcode_type="CODE-39", uom="Nos", rate=None,
+		)
+		zpl_no_price = build_label_zpl(row_no_price, settings, "Medium")
+		self.assertNotIn("N/A", zpl_no_price)
+		self.assertNotIn("0.00", zpl_no_price)
+
+		row_with_price = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X",
+			barcode="ABC123", barcode_type="CODE-39", uom="Nos", rate=10,
+		)
+		zpl_with_price = build_label_zpl(row_with_price, settings, "Medium")
+		self.assertIn(frappe.utils.fmt_money(10), zpl_with_price)
+
 	def test_alignment_center_and_right_shift_content_without_overflow(self):
 		"""Center/Right must actually move the barcode and text (not just
 		accept the setting and ignore it), while never pushing content

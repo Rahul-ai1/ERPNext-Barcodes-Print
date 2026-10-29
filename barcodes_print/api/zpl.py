@@ -185,11 +185,12 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		text_lines_after.append(_("Serial: {0}").format(row.serial_no))
 	if rules["show_uom"] and row.uom:
 		text_lines_after.append(f"UOM: {row.uom}")
-	if rules["show_rate"]:
+	if rules["show_rate"] and row.rate is not None:
 		# row.rate is None when no Item Price was found for the resolved
-		# Price List (or none was configured at all) - printed as "N/A"
-		# rather than silently showing "0.00" or skipping the line.
-		text_lines_after.append(frappe.utils.fmt_money(row.rate) if row.rate is not None else _("N/A"))
+		# Price List (or none was configured at all) - the line is left
+		# off the label entirely rather than printing "N/A" or a
+		# misleading "0.00".
+		text_lines_after.append(frappe.utils.fmt_money(row.rate))
 
 	n_lines = len(text_lines_before) + len(text_lines_after)
 
@@ -311,8 +312,8 @@ def resolve_row(
 		item_name=details.get("item_name") or "",
 		uom=details.get("uom") or "",
 		# None means no price was found for the resolved Price List (or
-		# none was configured) - build_label_zpl prints "N/A" for that,
-		# never a silent 0.00.
+		# none was configured) - build_label_zpl leaves the Rate line off
+		# the label entirely for that, never a silent 0.00.
 		rate=details.get("rate"),
 		price_list=price_list or "",
 		barcode=barcode or details.get("barcode") or "",

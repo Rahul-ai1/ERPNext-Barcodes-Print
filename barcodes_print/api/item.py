@@ -7,8 +7,8 @@ from frappe.utils import cint
 
 def get_item_price(item_code: str, price_list: str):
 	"""Return this Item's rate in the given Price List, or None if no Item
-	Price row exists for that combination - the caller prints "N/A" on the
-	label rather than a silently wrong/zero rate."""
+	Price row exists for that combination - the caller leaves the Rate line
+	off the label entirely rather than a silently wrong/zero rate."""
 	if not item_code or not price_list:
 		return None
 	rate = frappe.db.get_value(
@@ -32,10 +32,11 @@ def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str 
 		"has_batch_no": cint(item.has_batch_no),
 		"has_serial_no": cint(item.has_serial_no),
 		# None (not 0.0) means "no price found" - kept distinct from a
-		# genuine zero price so the label can print "N/A" instead of a
-		# misleading "0.00". Only ever resolved from the given Price List's
-		# own Item Price row - never Item.standard_rate, which isn't
-		# necessarily the rate anyone actually sells/buys at.
+		# genuine zero price so the label leaves the Rate line off entirely
+		# instead of printing a misleading "0.00". Only ever resolved from
+		# the given Price List's own Item Price row - never
+		# Item.standard_rate, which isn't necessarily the rate anyone
+		# actually sells/buys at.
 		"rate": get_item_price(item_code, price_list) if price_list else None,
 		"item_group": item.item_group or "",
 		"brand": item.brand or "",
