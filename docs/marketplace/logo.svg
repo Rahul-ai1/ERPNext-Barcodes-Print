@@ -1,0 +1,31 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1C8CF7"/>
+      <stop offset="1" stop-color="#0057D8"/>
+    </linearGradient>
+    <linearGradient id="tagShade" x1="190" y1="180" x2="400" y2="332" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EAF3FF"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="512" height="512" fill="url(#bg)"/>
+
+  <path d="M110 256 L190 180 H386 A14 14 0 0 1 400 194 V318 A14 14 0 0 1 386 332 H190 Z"
+        fill="url(#tagShade)"/>
+
+  <circle cx="152" cy="256" r="15" fill="#0B5FD9"/>
+
+  <g fill="#0B3C91">
+    <rect x="218" y="228" width="10" height="56" rx="2"/>
+    <rect x="236" y="228" width="6"  height="56" rx="2"/>
+    <rect x="250" y="228" width="14" height="56" rx="2"/>
+    <rect x="272" y="228" width="6"  height="56" rx="2"/>
+    <rect x="286" y="228" width="10" height="56" rx="2"/>
+    <rect x="304" y="228" width="6"  height="56" rx="2"/>
+    <rect x="318" y="228" width="14" height="56" rx="2"/>
+    <rect x="340" y="228" width="6"  height="56" rx="2"/>
+    <rect x="354" y="228" width="10" height="56" rx="2"/>
+  </g>
+</svg>

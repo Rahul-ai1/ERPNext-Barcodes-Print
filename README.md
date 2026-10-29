@@ -1,5 +1,7 @@
 # Barcodes Print
 
+<img src="docs/marketplace/logo.png" alt="Barcodes Print logo" width="96" height="96">
+
 [![CI](https://github.com/Rahul-ai1/ERPNext-Barcodes-Print/actions/workflows/ci.yml/badge.svg)](https://github.com/Rahul-ai1/ERPNext-Barcodes-Print/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](license.txt)
 
@@ -70,7 +72,7 @@ If an Item has more than one barcode registered, you're asked which one to use r
 | Doctype | Type | Purpose |
 |---|---|---|
 | Barcode Print Settings | Single | Central configuration — the only doctype with one record per site. |
-| Barcode Label Display Rule | Child table | One row per label size (Small/Medium/Large, plus 3 "Label Only" variants): display toggles + alignment. |
+| Barcode Label Display Rule | Child table | One row per label size (Small/Medium/Large, plus 3 "Label Only" variants): display toggles, alignment, and column count. |
 | Print Label Item | Child table | Row schema for the Print Barcode page's item grid — not a persisted business record. Includes Batch No, Serial Nos, Company, and Tax Template. |
 | Barcode Print Log | Standalone | Audit trail of every print attempt, success or failure. |
 

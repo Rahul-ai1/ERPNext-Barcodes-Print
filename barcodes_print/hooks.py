@@ -7,9 +7,9 @@ app_license = "MIT"
 # Read by frappe.utils.app_logo() for the app's own mark in the dock rail and
 # a dock-less sidebar's header - without this it falls back to a plain
 # letter avatar, regardless of the Dock/Sidebar fixtures' own icon fields.
-# "?v=1" makes browsers fetch the logo again after it changes (assets are
-# otherwise cached for a year).
-app_logo_url = "/assets/barcodes_print/icons/desktop_icons/subtle/barcodes_print.svg?v=1"
+# The "?v=N" suffix makes browsers fetch the logo again after it changes
+# (assets are otherwise cached for a year) - bump it on every icon update.
+app_logo_url = "/assets/barcodes_print/icons/desktop_icons/subtle/barcodes_print.svg?v=4"
 app_home = "/app/barcodes-print"
 required_apps = ["erpnext"]
 
