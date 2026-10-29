@@ -942,6 +942,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 			"doctype": "Serial and Batch Bundle",
 			"item_code": item_code,
 			"warehouse": warehouse,
+			"company": company,
 			"voucher_type": "Purchase Receipt",
 			"type_of_transaction": "Inward",
 			"has_serial_no": 1,
