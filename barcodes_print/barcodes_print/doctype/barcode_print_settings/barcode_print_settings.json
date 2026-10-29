@@ -45,7 +45,7 @@
    "reqd": 1
   },
   {
-   "description": "Exact printer name as it appears on the user's PC. If left blank, the user is prompted to pick a printer via the selected connector at print time.",
+   "description": "Exact printer name on this PC. Leave blank to prompt at print time.",
    "fieldname": "default_label_printer",
    "fieldtype": "Data",
    "label": "Default Label Printer"
@@ -56,7 +56,7 @@
   },
   {
    "default": "203",
-   "description": "DPI (dots per inch) of the label printer. Used to convert label sizes from mm to dots for ZPL. Most desktop thermal label printers (e.g. Zebra ZP 450, GC420t) are 203 DPI.",
+   "description": "Printer's DPI, used to convert label size to dots. Most thermal printers are 203 DPI.",
    "fieldname": "printer_dpi",
    "fieldtype": "Select",
    "label": "Printer DPI",
@@ -130,7 +130,7 @@
    "label": "Label Content (per size)"
   },
   {
-   "description": "One row per label size - check what shows on that size's label, and pick its alignment. A field can be off for Small but on for Medium/Large.",
+   "description": "One row per label size - what to show and its alignment.",
    "fieldname": "display_rules",
    "fieldtype": "Table",
    "label": "Display Rules",
@@ -142,7 +142,7 @@
    "label": "Pricing"
   },
   {
-   "description": "Used to auto-fetch each item's rate on the Print Barcode page whenever a label size's Display Rules show Rate. Can be overridden per row at print time. If no price is found for an item in the chosen Price List, the label prints \"N/A\" instead of a rate.",
+   "description": "Auto-fetches each item's rate when Display Rules show Rate. Overridable per row.",
    "fieldname": "default_price_list",
    "fieldtype": "Link",
    "label": "Default Price List",
@@ -155,14 +155,14 @@
   },
   {
    "default": "0",
-   "description": "Adds a Print Barcode button directly on submitted documents of the chosen Purchase Document Type, pre-filled with that document's items. The standalone Print Barcode page keeps working either way - this is purely additive.",
+   "description": "Adds a Print Barcode button on submitted documents of the chosen type.",
    "fieldname": "enable_purchase_document_printing",
    "fieldtype": "Check",
    "label": "Enable Printing From a Purchase Document"
   },
   {
    "depends_on": "eval:doc.enable_purchase_document_printing",
-   "description": "Only one at a time - matches whichever document your purchase flow actually submits. A subcontracted Purchase Order never shows this button regardless of this setting - print its finished goods from its own Subcontracting Order instead, which always has the button when this is enabled. Service/non-stock item rows never get a button row on any of these documents.",
+   "description": "Which document gets the button. Subcontracted POs use their Subcontracting Order instead.",
    "fieldname": "purchase_document_type",
    "fieldtype": "Select",
    "label": "Purchase Document Type",
@@ -176,7 +176,7 @@
   {
    "default": "0",
    "depends_on": "eval:doc.enable_purchase_document_printing && !doc.unlimited_reprints",
-   "description": "The most a line's own \"No. of Barcodes\" may ever be raised to beyond its quantity (e.g. for a torn/damaged label reprint) - never suggested by default, only ever a ceiling on what the user can manually type in. 0 = the line quantity is the hard ceiling, no extras allowed at all.",
+   "description": "Extra labels allowed beyond quantity (e.g. for reprints). 0 = none allowed.",
    "fieldname": "max_extra_barcodes_per_line",
    "fieldtype": "Int",
    "label": "Max Extra Barcodes per Line",
@@ -185,13 +185,13 @@
   {
    "default": "0",
    "depends_on": "eval:doc.enable_purchase_document_printing",
-   "description": "Removes the quantity + extra ceiling entirely, so the same Purchase Order/Receipt/Subcontracting Order can be reprinted from as many times as needed with no block. Each line still only ever defaults to its own quantity per print, never more - this only removes the limit on repeating that.",
+   "description": "Removes the reprint cap entirely - no limit on how many times a document can be reprinted.",
    "fieldname": "unlimited_reprints",
    "fieldtype": "Check",
    "label": "No Printing Limit (Unlimited Reprints)"
   },
   {
-   "description": "Auto-generated public certificate used to sign QZ Tray connections, so users approve printing from this site once, permanently, instead of on every print. The matching private key is stored encrypted and never shown here.",
+   "description": "Auto-generated certificate used to sign QZ Tray connections.",
    "fieldname": "qz_certificate",
    "fieldtype": "Long Text",
    "hidden": 1,
@@ -201,7 +201,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-09-30 02:00:00.000000",
+ "modified": "2026-10-29 05:29:21.102873",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",
