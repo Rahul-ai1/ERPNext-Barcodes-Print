@@ -709,6 +709,14 @@ barcodes_print.print_barcode_page.download_import_template = function () {
 // Scan a barcode/Serial No/Batch No (or type an Item Code) to fill or
 // update a grid row, instead of always picking an Item from the dropdown
 // first - see api.item.resolve_scan for what a scan can match.
+// options: "Barcode" is what gives a Data field this exact behavior
+// everywhere in ERPNext (e.g. Purchase Order's own "Scan Barcode" field):
+// a camera-scan icon/dialog (frappe.ui.Scanner, for a device with no
+// external USB/Bluetooth scanner hardware) alongside the plain text input,
+// and - since ControlData sets trigger_change_on_input_event - the value
+// commits (df.onchange fires) on blur/Enter AND on a debounced pause after
+// typing/scanning stops, so a scanner that sends no terminating keystroke
+// at all still works, not only one that sends Enter.
 barcodes_print.print_barcode_page.render_scan_box = function () {
 	const state = barcodes_print.print_barcode_page._state;
 	state.$scan_area.empty();
@@ -717,20 +725,29 @@ barcodes_print.print_barcode_page.render_scan_box = function () {
 		df: {
 			fieldname: "scan_barcode",
 			fieldtype: "Data",
+			options: "Barcode",
 			label: __("Scan Barcode"),
-			placeholder: __("Scan or type a barcode, Serial No, Batch No, or Item Code, then press Enter"),
+			placeholder: __("Scan (device or camera) or type a barcode, Serial No, Batch No, or Item Code"),
+			onchange: function () {
+				const value = (this.value || "").trim();
+				// Clear the visible input/control value directly, NOT via
+				// set_value("") - that re-enters this same onchange through
+				// its own commit pipeline (df.onchange fires again once the
+				// model value actually changes to ""), and recursing from
+				// inside an onchange that was itself invoked from inside
+				// set_value's commit chain hangs the whole page (confirmed
+				// live: every further page.evaluate() call stops responding
+				// entirely, not just this field - a real synchronous loop,
+				// not a slow one).
+				this.$input.val("");
+				this.value = "";
+				if (!value) return;
+				barcodes_print.print_barcode_page.handle_scan_value(value);
+			},
 		},
 		render_input: true,
 	});
 	scan_control.refresh();
-	scan_control.$input.on("keydown", (e) => {
-		if (e.key !== "Enter") return;
-		e.preventDefault();
-		const value = (scan_control.get_value() || "").trim();
-		if (!value) return;
-		barcodes_print.print_barcode_page.handle_scan_value(value);
-		scan_control.set_value("");
-	});
 };
 
 barcodes_print.print_barcode_page.handle_scan_value = function (value) {
