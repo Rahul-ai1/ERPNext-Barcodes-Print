@@ -31,3 +31,6 @@ barcodes_print/public/js/vendor/BrowserPrint-*.min.js
 test_prints/
 
 docs/*.docx
+
+# Internal requirement-analysis briefs - working notes, not published docs
+docs/specs/
