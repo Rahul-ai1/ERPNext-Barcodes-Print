@@ -7,7 +7,14 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from barcodes_print.api.barcode import get_barcode_print_settings, validate_barcode_compatibility
-from barcodes_print.api.item import get_item_barcode_details, get_item_rate_and_note, get_item_tax_rate_percent
+from barcodes_print.api.import_items import import_items_from_file
+from barcodes_print.api.item import (
+	batch_belongs_to_item,
+	get_item_barcode_details,
+	get_item_rate_and_note,
+	get_item_tax_rate_percent,
+	serial_no_item_and_batch,
+)
 from barcodes_print.api.printer import get_my_default_printer, set_my_default_printer
 from barcodes_print.api.zpl import (
 	_get_purchase_receipt_batch_serial_map,
@@ -1367,3 +1374,144 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertEqual(job["total_labels"], len(serials))
 		self.assertEqual(len(job["resolved_items"]), len(serials))
 		self.assertEqual({r["barcode"] for r in job["resolved_items"]}, set(serials))
+
+	# ---- Feature: Load from Excel/CSV (barcodes_print.api.import_items) ----
+
+	def _create_csv_file(self, rows: list) -> str:
+		"""A real "File" doctype record holding CSV content - exercises the
+		actual frappe.get_doc("File", {"file_url": ...}).get_content() path
+		import_items_from_file uses, not a mocked file read."""
+		content = "\n".join(",".join(str(c) for c in row) for row in rows)
+		file_doc = frappe.get_doc({
+			"doctype": "File",
+			"file_name": f"test-import-{frappe.generate_hash(length=6)}.csv",
+			"content": content.encode("utf-8"),
+			"is_private": 1,
+		}).insert(ignore_permissions=True)
+		return file_doc.file_url
+
+	def test_batch_belongs_to_item_and_serial_lookup_helpers(self):
+		"""The shared helpers resolve_row and the CSV importer both rely on
+		for batch/serial ownership - single source of truth for this check."""
+		item_code, batch_no = self._create_batch_tracked_item()
+		other_item_code = self._create_test_item_with_barcode()
+		self.assertTrue(batch_belongs_to_item(batch_no, item_code))
+		self.assertFalse(batch_belongs_to_item(batch_no, other_item_code))
+		self.assertFalse(batch_belongs_to_item("NO-SUCH-BATCH", item_code))
+
+		serial_item_code, serials = self._create_serial_tracked_item()
+		found_item, found_batch = serial_no_item_and_batch(serials[0])
+		self.assertEqual(found_item, serial_item_code)
+		self.assertEqual(found_batch, "")
+		missing_item, missing_batch = serial_no_item_and_batch("NO-SUCH-SERIAL")
+		self.assertIsNone(missing_item)
+		self.assertIsNone(missing_batch)
+
+	def test_import_items_from_file_valid_rows(self):
+		item_a = self._create_test_item_with_barcode()
+		item_b = self._create_test_item_with_barcode()
+		file_url = self._create_csv_file([
+			["item_code", "qty"],
+			[item_a, 3],
+			[item_b, 1],
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(result["errors"], [])
+		self.assertEqual(len(result["rows"]), 2)
+		self.assertEqual(result["rows"][0]["item"], item_a)
+		self.assertEqual(result["rows"][0]["no_of_barcodes"], 3)
+		self.assertEqual(result["rows"][1]["item"], item_b)
+
+	def test_import_items_from_file_accepts_header_synonyms(self):
+		"""sku/quantity/copies are all accepted as synonyms for
+		item_code/no_of_barcodes, matching the flexible header mapping."""
+		item_code = self._create_test_item_with_barcode()
+		file_url = self._create_csv_file([
+			["SKU", "Quantity"],
+			[item_code, 7],
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(result["errors"], [])
+		self.assertEqual(result["rows"][0]["item"], item_code)
+		self.assertEqual(result["rows"][0]["no_of_barcodes"], 7)
+
+	def test_import_items_from_file_reports_bad_rows_without_failing_the_file(self):
+		"""A row with an unknown Item Code is skipped and reported - the
+		other, valid row in the same file still comes through."""
+		item_code = self._create_test_item_with_barcode()
+		file_url = self._create_csv_file([
+			["item_code", "qty"],
+			[item_code, 2],
+			["NO-SUCH-ITEM-CODE", 1],
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(len(result["rows"]), 1)
+		self.assertEqual(result["rows"][0]["item"], item_code)
+		self.assertEqual(len(result["errors"]), 1)
+		self.assertIn("NO-SUCH-ITEM-CODE", result["errors"][0])
+
+	def test_import_items_from_file_validates_batch_and_serial_ownership(self):
+		item_code, batch_no = self._create_batch_tracked_item()
+		other_item_code, other_batch_no = self._create_batch_tracked_item()
+		serial_item_code, serials = self._create_serial_tracked_item()
+
+		file_url = self._create_csv_file([
+			["item_code", "qty", "batch_no", "serial_nos"],
+			[item_code, 1, batch_no, ""],  # valid batch for this item
+			[item_code, 1, other_batch_no, ""],  # batch belongs to a different item
+			[serial_item_code, 1, "", serials[0]],  # valid serial for this item
+			[item_code, 1, "", serials[0]],  # serial belongs to a different item
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(len(result["rows"]), 2)
+		self.assertEqual(result["rows"][0]["batch_no"], batch_no)
+		self.assertEqual(result["rows"][1]["serial_nos"], serials[0])
+		self.assertEqual(len(result["errors"]), 2)
+		self.assertTrue(any(other_batch_no in e for e in result["errors"]))
+		self.assertTrue(any(serials[0] in e and "belongs to Item" in e for e in result["errors"]))
+
+	def test_import_items_from_file_rejects_disabled_items_and_bad_quantities(self):
+		item_code = self._create_test_item_with_barcode()
+		frappe.db.set_value("Item", item_code, "disabled", 1)
+		zero_qty_item = self._create_test_item_with_barcode()
+
+		file_url = self._create_csv_file([
+			["item_code", "qty"],
+			[item_code, 1],
+			[zero_qty_item, 0],
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(result["rows"], [])
+		self.assertEqual(len(result["errors"]), 2)
+
+	def test_import_items_from_file_rejects_file_over_row_limit(self):
+		import barcodes_print.api.import_items as import_items_module
+
+		item_code = self._create_test_item_with_barcode()
+		original_max = import_items_module.MAX_IMPORT_ROWS
+		import_items_module.MAX_IMPORT_ROWS = 2
+		try:
+			file_url = self._create_csv_file([
+				["item_code", "qty"],
+				[item_code, 1],
+				[item_code, 1],
+				[item_code, 1],
+			])
+			with self.assertRaises(frappe.ValidationError):
+				import_items_from_file(file_url)
+		finally:
+			import_items_module.MAX_IMPORT_ROWS = original_max
+
+	def test_import_items_from_file_blank_rows_are_skipped_silently(self):
+		"""A fully blank spreadsheet row (common trailing-rows artifact from
+		spreadsheet software) is skipped without being reported as an error,
+		unlike a row with real but invalid data."""
+		item_code = self._create_test_item_with_barcode()
+		file_url = self._create_csv_file([
+			["item_code", "qty"],
+			[item_code, 1],
+			["", ""],
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(len(result["rows"]), 1)
+		self.assertEqual(result["errors"], [])

@@ -354,6 +354,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 		"Add items below, choose a label size, and print directly to your label printer. Nothing here is saved as a document - each print is a one-time action."
 	)}</p>`).appendTo($wrapper);
 
+	const $import_area = $('<div style="margin-bottom: 10px;">').appendTo($wrapper);
 	const $items_area = $('<div style="margin-bottom: 10px;">').appendTo($wrapper);
 	const $total_area = $('<div class="text-muted" style="margin-bottom: 20px; font-size: 13px;">').appendTo($wrapper);
 	const $size_area = $('<div style="max-width: 200px;">').appendTo($wrapper);
@@ -428,9 +429,12 @@ barcodes_print.print_barcode_page.render = function (page) {
 			$source_banner,
 			$total_area,
 			$printer_area,
+			$import_area,
 			source_doctype: "",
 			source_name: "",
 		};
+
+		barcodes_print.print_barcode_page.render_import_export();
 
 		barcodes_print.print_barcode_page.update_total();
 		barcodes_print.print_barcode_page.render_my_printer();
@@ -502,6 +506,151 @@ barcodes_print.print_barcode_page.prompt_my_printer_choice = function () {
 		.catch((err) => {
 			frappe.msgprint(__("Could not list printers: {0}", [err.message || err]));
 		});
+};
+
+// Bulk-fill the grid from an uploaded Excel/CSV file, or download the
+// current rows as a re-uploadable template - see api/import_items.py for
+// the column shape and per-row validation rules.
+barcodes_print.print_barcode_page.IMPORT_TEMPLATE_COLUMNS = [
+	"item_code", "barcode", "no_of_barcodes", "price_list", "company", "tax_template", "batch_no", "serial_nos",
+];
+
+barcodes_print.print_barcode_page.render_import_export = function () {
+	const state = barcodes_print.print_barcode_page._state;
+	state.$import_area.empty();
+	$(`<a href="#" style="margin-right: 14px;">${__("Load from File")}</a>`)
+		.appendTo(state.$import_area)
+		.on("click", (e) => {
+			e.preventDefault();
+			barcodes_print.print_barcode_page.prompt_import_file();
+		});
+	$(`<a href="#">${__("Download Template")}</a>`)
+		.appendTo(state.$import_area)
+		.on("click", (e) => {
+			e.preventDefault();
+			barcodes_print.print_barcode_page.download_import_template();
+		});
+};
+
+barcodes_print.print_barcode_page.prompt_import_file = function () {
+	new frappe.ui.FileUploader({
+		folder: "Home",
+		allow_multiple: false,
+		restrictions: { allowed_file_types: [".xlsx", ".xls", ".csv"] },
+		on_success: (file_doc) => {
+			frappe.call({
+				method: "barcodes_print.api.import_items.import_items_from_file",
+				args: { file_url: file_doc.file_url },
+				freeze: true,
+				freeze_message: __("Reading file..."),
+			}).then((r) => {
+				const result = r.message || {};
+				const rows = result.rows || [];
+				const errors = result.errors || [];
+				if (rows.length) {
+					barcodes_print.print_barcode_page.populate_rows_from_import(rows);
+				}
+				if (errors.length) {
+					barcodes_print.print_barcode_page.show_import_errors(errors, rows.length);
+				} else {
+					frappe.show_alert({ message: __("{0} rows added.", [rows.length]), indicator: "green" });
+				}
+			});
+		},
+	});
+};
+
+barcodes_print.print_barcode_page.show_import_errors = function (errors, added_count) {
+	const list = errors.map((e) => `<li>${frappe.utils.escape_html(e)}</li>`).join("");
+	frappe.msgprint({
+		title: __("Some rows were skipped"),
+		indicator: "orange",
+		message: `<p>${__("{0} rows were added. {1} rows were skipped:", [added_count, errors.length])}</p><ul>${list}</ul>`,
+	});
+};
+
+// Mirrors apply_route_options()'s own row-population pattern (grid.add_new_row()
+// + direct doc/refresh_field, since a programmatically-added row never gets
+// its field controls lazily built) - kept as its own function rather than
+// sharing apply_route_options's, since an imported row's shape (serial_nos
+// already newline-joined, no source_row_name/max_allowed) differs from a
+// Purchase Order/Receipt line's.
+barcodes_print.print_barcode_page.populate_rows_from_import = function (rows) {
+	const state = barcodes_print.print_barcode_page._state;
+	const grid = state.items_control.grid;
+	const mode = state.batch_serial_print_mode || "Both";
+
+	rows.forEach((item_row) => {
+		grid.add_new_row();
+		const row = grid.grid_rows[grid.grid_rows.length - 1];
+		row.doc.item = item_row.item;
+		row.doc.no_of_barcodes = item_row.no_of_barcodes;
+		row.doc.price_list = item_row.price_list || state.default_price_list || "";
+		row.doc.company = item_row.company || "";
+		row.doc.tax_template = item_row.tax_template || "";
+		const refresh_fields = ["item", "no_of_barcodes", "price_list", "company", "tax_template"];
+		if (mode !== "Serial Only" && mode !== "Neither") {
+			row.doc.batch_no = item_row.batch_no || "";
+			refresh_fields.push("batch_no");
+		}
+		if (mode !== "Batch Only" && mode !== "Neither") {
+			row.doc.serial_nos = item_row.serial_nos || "";
+			refresh_fields.push("serial_nos");
+		}
+		refresh_fields.forEach((f) => row.refresh_field(f));
+
+		frappe.call({
+			method: "barcodes_print.api.item.get_item_barcode_details",
+			args: {
+				item_code: item_row.item,
+				barcode: item_row.barcode || "",
+				price_list: row.doc.price_list,
+				tax_template: row.doc.tax_template || "",
+			},
+			callback(r) {
+				const item_data = r.message || {};
+				row.doc.item_name = item_data.item_name || "";
+				row.doc.uom = item_data.uom || "";
+				row.doc.barcode = item_data.barcode || "";
+				row.doc.barcode_type = item_data.barcode_type || "";
+				row.doc.rate = item_data.rate;
+				row.doc._has_batch_no = item_data.has_batch_no;
+				row.doc._has_serial_no = item_data.has_serial_no;
+				["item_name", "uom", "barcode", "barcode_type", "rate"].forEach((f) => row.refresh_field(f));
+
+				const choices = item_data.barcodes || [];
+				if (choices.length > 1 && !item_data.barcode) {
+					barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
+				}
+			},
+		});
+	});
+	barcodes_print.print_barcode_page.update_total();
+};
+
+barcodes_print.print_barcode_page.download_import_template = function () {
+	const state = barcodes_print.print_barcode_page._state;
+	const cols = barcodes_print.print_barcode_page.IMPORT_TEMPLATE_COLUMNS;
+	const field_for_col = {
+		item_code: "item", barcode: "barcode", no_of_barcodes: "no_of_barcodes", price_list: "price_list",
+		company: "company", tax_template: "tax_template", batch_no: "batch_no", serial_nos: "serial_nos",
+	};
+	const rows = state.items_control.get_value() || [];
+	const csv_escape = (v) => {
+		const s = v === null || v === undefined ? "" : String(v);
+		return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+	};
+	const lines = [cols.join(",")];
+	rows.forEach((row) => {
+		lines.push(cols.map((c) => csv_escape(row[field_for_col[c]])).join(","));
+	});
+
+	const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+	const url = URL.createObjectURL(blob);
+	const $link = $("<a>").attr({ href: url, download: "barcode_print_template.csv" }).appendTo("body");
+	$link[0].click();
+	$link.remove();
+	URL.revokeObjectURL(url);
 };
 
 // A live running total, updated on every row add/remove/quantity change -

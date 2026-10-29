@@ -29,7 +29,11 @@ from barcodes_print.api.barcode import (
 	get_display_barcode_type,
 	validate_barcode_compatibility,
 )
-from barcodes_print.api.item import get_item_barcode_details
+from barcodes_print.api.item import (
+	batch_belongs_to_item,
+	get_item_barcode_details,
+	serial_no_item_and_batch,
+)
 
 LABEL_SIZES = ("Small", "Medium", "Large")
 
@@ -305,21 +309,21 @@ def resolve_row(
 		batch_no = ""
 
 	if serial_no:
-		serial_doc = frappe.db.get_value("Serial No", serial_no, ["item_code", "batch_no"], as_dict=True)
-		if not serial_doc:
+		serial_item_code, serial_batch_no = serial_no_item_and_batch(serial_no)
+		if serial_item_code is None:
 			frappe.throw(_("Row #{0}: Serial No {1} was not found.").format(idx, serial_no))
-		if serial_doc.item_code != item_code:
+		if serial_item_code != item_code:
 			frappe.throw(
 				_("Row #{0}: Serial No {1} belongs to Item {2}, not {3}.").format(
-					idx, serial_no, serial_doc.item_code, item_code
+					idx, serial_no, serial_item_code, item_code
 				)
 			)
-		batch_no = batch_no or serial_doc.batch_no or ""
+		batch_no = batch_no or serial_batch_no or ""
 		barcode = serial_no
 		barcode_type = "Code 128"
 		no_of_barcodes = 1
 	elif batch_no:
-		if not frappe.db.exists("Batch", {"name": batch_no, "item": item_code}):
+		if not batch_belongs_to_item(batch_no, item_code):
 			frappe.throw(_("Row #{0}: Batch No {1} was not found for Item {2}.").format(idx, batch_no, item_code))
 		barcode = batch_no
 		barcode_type = "Code 128"

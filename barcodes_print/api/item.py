@@ -156,6 +156,25 @@ def get_item_barcode_details(
 	return details
 
 
+def batch_belongs_to_item(batch_no: str, item_code: str) -> bool:
+	"""Whether `batch_no` is a real Batch recorded against `item_code` -
+	the single source of truth for this check, used both when actually
+	resolving a print row and when validating a bulk-uploaded file before
+	any of its rows reach the grid."""
+	return bool(frappe.db.exists("Batch", {"name": batch_no, "item": item_code}))
+
+
+def serial_no_item_and_batch(serial_no: str) -> tuple:
+	"""The Item and Batch a Serial No actually belongs to, or (None, None)
+	if it doesn't exist - the single source of truth for this lookup, used
+	both when actually resolving a print row and when validating a
+	bulk-uploaded file before any of its rows reach the grid."""
+	row = frappe.db.get_value("Serial No", serial_no, ["item_code", "batch_no"], as_dict=True)
+	if not row:
+		return None, None
+	return row.item_code, row.batch_no or ""
+
+
 @frappe.whitelist()
 def get_available_batches(item_code: str) -> list:
 	"""Existing Batches for this Item, newest first - lets the Print Barcode
