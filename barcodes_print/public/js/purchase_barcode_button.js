@@ -18,6 +18,11 @@ barcodes_print.add_purchase_print_barcode_button = function (frm, doctype) {
 	if (doctype === "Purchase Order" && frm.doc.is_subcontracted) {
 		return;
 	}
+	// Return (credit note) Purchase Invoices are explicitly out of scope -
+	// printing from a standard invoice is supported, a return isn't.
+	if (doctype === "Purchase Invoice" && frm.doc.is_return) {
+		return;
+	}
 
 	frappe.call({
 		method: "barcodes_print.api.zpl.is_purchase_print_enabled_for",

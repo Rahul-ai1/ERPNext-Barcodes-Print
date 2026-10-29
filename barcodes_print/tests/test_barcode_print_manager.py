@@ -6,11 +6,25 @@ import re
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from barcodes_print.api.barcode import get_barcode_print_settings, validate_barcode_compatibility
-from barcodes_print.api.item import get_item_barcode_details, get_item_rate_and_note, get_item_tax_rate_percent
+from barcodes_print.api.barcode import (
+	base_size_of,
+	get_barcode_print_settings,
+	is_label_only_size,
+	validate_barcode_compatibility,
+)
+from barcodes_print.api.import_items import import_items_from_file
+from barcodes_print.api.item import (
+	batch_belongs_to_item,
+	get_item_barcode_details,
+	get_item_rate_and_note,
+	get_item_stock_qty,
+	get_item_tax_rate_percent,
+	resolve_scan,
+	serial_no_item_and_batch,
+)
 from barcodes_print.api.printer import get_my_default_printer, set_my_default_printer
 from barcodes_print.api.zpl import (
-	_get_purchase_receipt_batch_serial_map,
+	_get_batch_serial_map,
 	build_label_zpl,
 	get_label_dimensions_dots,
 	get_purchase_document_items,
@@ -169,7 +183,32 @@ class TestBarcodePrintManager(FrappeTestCase):
 				"country": "India",
 			}).insert(ignore_permissions=True).name
 		self._ensure_fiscal_year_for_company(company_name)
+		self._ensure_company_cost_center(company_name)
 		return company_name
+
+	def _ensure_company_cost_center(self, company_name):
+		"""A freshly-inserted Company always gets a working default Cost
+		Center from ERPNext's own Company controller - but a dev bench's
+		pre-existing real Company may have been set up without ever running
+		the full Setup Wizard, leaving this blank. Purchase Invoice
+		submission posts GL entries immediately and throws if no Cost
+		Center resolves for a P&L account, unlike Purchase Order/Receipt -
+		so this is only actually needed before creating a Purchase Invoice,
+		but is harmless to ensure for every company regardless."""
+		if frappe.db.get_value("Company", company_name, "cost_center"):
+			return
+		existing = frappe.get_all("Cost Center", filters={"company": company_name, "is_group": 0}, limit=1)
+		if existing:
+			cost_center = existing[0].name
+		else:
+			abbr = frappe.db.get_value("Company", company_name, "abbr")
+			cost_center = frappe.get_doc({
+				"doctype": "Cost Center",
+				"cost_center_name": "Main",
+				"company": company_name,
+				"is_group": 0,
+			}).insert(ignore_permissions=True).name
+		frappe.db.set_value("Company", company_name, "cost_center", cost_center)
 
 	def _get_or_create_supplier(self):
 		existing = frappe.get_all("Supplier", limit=1)
@@ -268,6 +307,91 @@ class TestBarcodePrintManager(FrappeTestCase):
 
 		row = resolve_row(item_code, barcode="12345678", no_of_barcodes=1)
 		self.assertTrue((row.barcode_type or "").strip())
+
+	# ---- Feature: "Label Only" sizes (barcodes_print.api.barcode/zpl) ----
+
+	def _create_item_without_barcode(self):
+		item_code = f"TEST-ITEM-NO-BARCODE-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "No Barcode Test Item",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": "Nos",
+		}).insert(ignore_permissions=True)
+		return item_code
+
+	def test_is_label_only_size_and_base_size_of(self):
+		self.assertTrue(is_label_only_size("Small Label Only"))
+		self.assertTrue(is_label_only_size("Medium Label Only"))
+		self.assertFalse(is_label_only_size("Small"))
+		self.assertFalse(is_label_only_size(""))
+		self.assertEqual(base_size_of("Small Label Only"), "Small")
+		self.assertEqual(base_size_of("Large Label Only"), "Large")
+		self.assertEqual(base_size_of("Medium"), "Medium")
+
+	def test_get_label_dimensions_dots_label_only_reuses_base_size(self):
+		"""A Label Only choice must print on the exact same physical label
+		as its base size - no separate dimension fields exist for it."""
+		settings = get_barcode_print_settings()
+		self.assertEqual(
+			get_label_dimensions_dots(settings, "Small Label Only"),
+			get_label_dimensions_dots(settings, "Small"),
+		)
+
+	def test_resolve_row_label_only_skips_barcode_requirement(self):
+		"""The one behavior change this feature makes: an Item with no
+		barcode, which would otherwise hard-error, resolves cleanly when a
+		Label Only size is explicitly chosen."""
+		item_code = self._create_item_without_barcode()
+		row = resolve_row(item_code, no_of_barcodes=2, size="Small Label Only")
+		self.assertEqual(row.barcode, "")
+		self.assertEqual(row.no_of_barcodes, 2)
+
+	def test_resolve_row_existing_sizes_still_require_barcode(self):
+		"""The hard constraint this feature must never weaken: a real
+		Small/Medium/Large size (or no size at all) still throws on a
+		missing barcode, exactly as before this feature existed."""
+		item_code = self._create_item_without_barcode()
+		with self.assertRaises(frappe.ValidationError):
+			resolve_row(item_code, no_of_barcodes=1, size="Small")
+		with self.assertRaises(frappe.ValidationError):
+			resolve_row(item_code, no_of_barcodes=1)  # no size passed at all
+
+	def test_resolve_row_label_only_strips_batch_and_serial(self):
+		"""Batch/Serial selection isn't offered for a Label Only size -
+		enforced server-side (defense in depth) by stripping it before the
+		batch-ownership check even runs, not just hidden client-side."""
+		item_code, _ = self._create_batch_tracked_item()
+		row = resolve_row(item_code, no_of_barcodes=1, batch_no="NO-SUCH-BATCH", size="Medium Label Only")
+		self.assertEqual(row.batch_no, "")
+		self.assertEqual(row.barcode, "")
+
+	def test_build_label_zpl_label_only_prints_text_without_a_barcode(self):
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Medium Label Only"]["show_rate"] = 1
+		row = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X", barcode="", barcode_type="",
+			uom="Nos", rate=42, price_note="Excl. of taxes",
+		)
+		zpl = build_label_zpl(row, settings, "Medium Label Only")
+		self.assertIn("^XA", zpl)
+		self.assertIn("^XZ", zpl)
+		self.assertIn("Item X", zpl)
+		self.assertIn(frappe.utils.fmt_money(42), zpl)
+		# No barcode field command of any kind - ^B. is the common prefix
+		# for every symbology this app emits (^BC/^BE/^B3/^BQ/^BX/etc.).
+		self.assertNotRegex(zpl, r"\^B[A-Z0-9]")
+
+	def test_get_quick_print_job_label_only_size_end_to_end(self):
+		"""Full integration: an Item with no barcode, which would normally
+		block printing entirely, succeeds end-to-end at a Label Only size."""
+		item_code = self._create_item_without_barcode()
+		job = get_quick_print_job([{"item": item_code, "no_of_barcodes": 3}], "Small Label Only")
+		self.assertEqual(job["total_labels"], 3)
+		self.assertEqual(job["zpl"].count("^XA"), 3)
+		self.assertNotRegex(job["zpl"], r"\^B[A-Z0-9]")
 
 	def test_item_master_barcode_types_ean_itf_code128(self):
 		"""Important Requirement: Use the exact barcode type from Item Master (EAN-13, ITF, CODE-128)."""
@@ -1028,12 +1152,33 @@ class TestBarcodePrintManager(FrappeTestCase):
 		po.submit()
 		return po
 
+	def _create_purchase_invoice(self, item_rows, update_stock=0):
+		supplier = self._get_or_create_supplier()
+		company = self._get_or_create_company()
+		if update_stock:
+			# A Purchase Invoice only ever carries real batch/serial data
+			# (legacy fields or a Serial and Batch Bundle) when it's also
+			# updating stock - a plain billing-only invoice doesn't touch
+			# them at all, so every row needs its own warehouse here.
+			warehouse = frappe.get_all("Warehouse", filters={"company": company}, limit=1)[0].name
+			for row in item_rows:
+				row.setdefault("warehouse", warehouse)
+		pi = frappe.get_doc({
+			"doctype": "Purchase Invoice",
+			"supplier": supplier,
+			"company": company,
+			"update_stock": update_stock,
+			"items": item_rows,
+		}).insert(ignore_permissions=True)
+		pi.submit()
+		return pi
+
 	def _create_purchase_receipt_item_row(self, item_row):
 		"""A single-row Purchase Receipt, left as a draft - this is only
-		ever used to test _get_purchase_receipt_batch_serial_map directly,
-		which reads Purchase Receipt Item rows regardless of docstatus, so
-		submitting (and the stock/GL postings that would trigger) is never
-		needed here. Returns the row's own name."""
+		ever used to test _get_batch_serial_map directly, which reads
+		Purchase Receipt Item rows regardless of docstatus, so submitting
+		(and the stock/GL postings that would trigger) is never needed
+		here. Returns the row's own name."""
 		supplier = self._get_or_create_supplier()
 		company = self._get_or_create_company()
 		warehouse = frappe.get_all("Warehouse", filters={"company": company}, limit=1)[0].name
@@ -1058,7 +1203,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 			"batch_no": batch_no,
 		})
 
-		result = _get_purchase_receipt_batch_serial_map([row_name])
+		result = _get_batch_serial_map("Purchase Receipt Item", [row_name])
 		self.assertEqual(result[row_name], {"batch_no": batch_no, "serial_no": ""})
 
 	def test_purchase_receipt_batch_serial_map_bundle_mode(self):
@@ -1106,7 +1251,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 			"serial_and_batch_bundle": bundle.name,
 		})
 
-		result = _get_purchase_receipt_batch_serial_map([row_name])
+		result = _get_batch_serial_map("Purchase Receipt Item", [row_name])
 		self.assertEqual(result[row_name]["batch_no"], "")
 		self.assertEqual(set(result[row_name]["serial_no"].splitlines()), set(serials))
 
@@ -1163,6 +1308,141 @@ class TestBarcodePrintManager(FrappeTestCase):
 			settings_doc.enable_purchase_document_printing = 0
 			settings_doc.purchase_document_type = ""
 			settings_doc.save(ignore_permissions=True)
+
+	def test_get_purchase_document_items_for_purchase_invoice(self):
+		"""Purchase Invoice mirrors Purchase Order/Receipt's own pattern:
+		service items excluded, Company/Tax Template fetched per line from
+		the invoice itself, and - since an invoice line can carry a real
+		batch/serial the same way a Receipt line can - batch_no/serial_no
+		resolved via the same shared _get_batch_serial_map."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.enable_purchase_document_printing = 1
+		settings_doc.purchase_document_type = "Purchase Invoice"
+		settings_doc.save(ignore_permissions=True)
+
+		item_code, batch_no = self._create_batch_tracked_item()
+		service_item = self._create_service_item()
+		company = self._get_or_create_company()
+		template = self._create_item_tax_template(company, 5)
+
+		pi = self._create_purchase_invoice([
+			{
+				"item_code": item_code, "qty": 3, "rate": 10,
+				"use_serial_batch_fields": 1, "batch_no": batch_no,
+				"item_tax_template": template.name,
+			},
+			{"item_code": service_item, "qty": 1, "rate": 5},
+		])
+
+		try:
+			prefill = get_purchase_document_items("Purchase Invoice", pi.name)
+			self.assertEqual(len(prefill["items"]), 1)  # service line excluded
+			row = prefill["items"][0]
+			self.assertEqual(row["item"], item_code)
+			self.assertEqual(row["company"], company)
+			self.assertEqual(row["tax_template"], template.name)
+			self.assertEqual(row["batch_no"], batch_no)
+		finally:
+			pi.cancel()
+			frappe.delete_doc("Purchase Invoice", pi.name, force=True, ignore_permissions=True)
+			settings_doc.enable_purchase_document_printing = 0
+			settings_doc.purchase_document_type = ""
+			settings_doc.save(ignore_permissions=True)
+
+	def test_get_purchase_document_items_blocks_return_purchase_invoice(self):
+		"""A Return (credit note) Purchase Invoice is explicitly out of
+		scope - printing from one is blocked, matching how printing from a
+		subcontracted Purchase Order is blocked."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.enable_purchase_document_printing = 1
+		settings_doc.purchase_document_type = "Purchase Invoice"
+		settings_doc.save(ignore_permissions=True)
+
+		item_code = self._create_test_item_with_barcode()
+		pi = self._create_purchase_invoice([{"item_code": item_code, "qty": 2, "rate": 10}])
+		# Bypasses ERPNext's own Return-document validation (a real return
+		# needs a linked original invoice, negative qty, etc.) - only the
+		# specific flag this code path actually checks needs to be true.
+		frappe.db.set_value("Purchase Invoice", pi.name, "is_return", 1)
+
+		try:
+			with self.assertRaises(frappe.ValidationError):
+				get_purchase_document_items("Purchase Invoice", pi.name)
+		finally:
+			frappe.db.set_value("Purchase Invoice", pi.name, "is_return", 0)
+			pi.reload()
+			pi.cancel()
+			frappe.delete_doc("Purchase Invoice", pi.name, force=True, ignore_permissions=True)
+			settings_doc.enable_purchase_document_printing = 0
+			settings_doc.purchase_document_type = ""
+			settings_doc.save(ignore_permissions=True)
+
+	def test_is_purchase_print_enabled_for_purchase_invoice(self):
+		"""Purchase Invoice behaves as a normal alternative choice alongside
+		Purchase Order/Purchase Receipt - on only when Settings points at it,
+		not unconditional like Subcontracting Order."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.enable_purchase_document_printing = 1
+		settings_doc.purchase_document_type = "Purchase Invoice"
+		settings_doc.save(ignore_permissions=True)
+
+		try:
+			self.assertTrue(is_purchase_print_enabled_for("Purchase Invoice"))
+			self.assertFalse(is_purchase_print_enabled_for("Purchase Order"))
+			self.assertFalse(is_purchase_print_enabled_for("Purchase Receipt"))
+			self.assertTrue(is_purchase_print_enabled_for("Subcontracting Order"))
+		finally:
+			settings_doc.enable_purchase_document_printing = 0
+			settings_doc.purchase_document_type = ""
+			settings_doc.save(ignore_permissions=True)
+
+	def test_purchase_invoice_batch_serial_map_bundle_mode(self):
+		"""Purchase Invoice Item shares the identical batch/serial recording
+		fields with Purchase Receipt Item, so the same _get_batch_serial_map
+		resolves a Serial and Batch Bundle on an invoice line too."""
+		item_code = f"TEST-ITEM-PI-SERIAL-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "Test PI Serial Item",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": "Nos",
+			"has_serial_no": 1,
+		}).insert(ignore_permissions=True)
+
+		company = self._get_or_create_company()
+		warehouse = frappe.get_all("Warehouse", filters={"company": company}, limit=1)[0].name
+		serial = frappe.get_doc({
+			"doctype": "Serial No",
+			"serial_no": f"TEST-PI-SN-{frappe.generate_hash(length=8)}",
+			"item_code": item_code,
+			"company": company,
+			"status": "Inactive",
+		}).insert(ignore_permissions=True)
+
+		bundle = frappe.get_doc({
+			"doctype": "Serial and Batch Bundle",
+			"item_code": item_code,
+			"warehouse": warehouse,
+			"company": company,
+			"voucher_type": "Purchase Invoice",
+			"type_of_transaction": "Inward",
+			"has_serial_no": 1,
+			"entries": [{"serial_no": serial.name, "qty": 1}],
+		}).insert(ignore_permissions=True)
+
+		pi = self._create_purchase_invoice([{
+			"item_code": item_code, "qty": 1, "rate": 10,
+			"use_serial_batch_fields": 0, "serial_and_batch_bundle": bundle.name,
+		}], update_stock=1)
+		try:
+			row_name = pi.items[0].name
+			result = _get_batch_serial_map("Purchase Invoice Item", [row_name])
+			self.assertEqual(result[row_name]["serial_no"], serial.name)
+		finally:
+			pi.cancel()
+			frappe.delete_doc("Purchase Invoice", pi.name, force=True, ignore_permissions=True)
 
 	def test_is_purchase_print_enabled_for_subcontracting_order_is_unconditional(self):
 		"""Subcontracting Order isn't an alternative choice alongside
@@ -1367,3 +1647,244 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertEqual(job["total_labels"], len(serials))
 		self.assertEqual(len(job["resolved_items"]), len(serials))
 		self.assertEqual({r["barcode"] for r in job["resolved_items"]}, set(serials))
+
+	# ---- Feature: Scan-to-fill + Stock Qty (barcodes_print.api.item) ----
+
+	def test_get_item_stock_qty_none_for_non_stock_item(self):
+		"""Service items don't track stock at all - None, not 0, so the
+		page can tell "zero in stock" apart from "doesn't track stock"."""
+		service_item = self._create_service_item()
+		self.assertIsNone(get_item_stock_qty(service_item)["stock_qty"])
+
+	def test_get_item_stock_qty_overall_for_stock_item(self):
+		"""A real stock Item with no stock ledger entries yet is still 0.0
+		(a known, tracked quantity), never None."""
+		item_code = self._create_test_item_with_barcode()
+		self.assertEqual(get_item_stock_qty(item_code)["stock_qty"], 0.0)
+
+	def test_get_item_stock_qty_works_for_a_plain_system_manager(self):
+		"""Regression test for a real bug caught only by live browser
+		testing, never by a test run as Administrator (who bypasses every
+		permission check by design): erpnext.stock.utils.get_latest_stock_qty()
+		enforces its own explicit "Item: read" permission, which a System
+		Manager role does not automatically carry for every doctype - this
+		app's own convention (get_item_barcode_details and friends) reads
+		Item data directly instead, trusting the page-level permission gate,
+		and get_item_stock_qty must do the same rather than going through
+		that core function."""
+		item_code = self._create_test_item_with_barcode()
+		user_email = f"test-stock-qty-{frappe.generate_hash(length=6)}@example.com"
+		frappe.get_doc({
+			"doctype": "User", "email": user_email, "first_name": "Stock Qty Test",
+			"send_welcome_email": 0, "roles": [{"role": "System Manager"}],
+		}).insert(ignore_permissions=True)
+		original_user = frappe.session.user
+		try:
+			frappe.set_user(user_email)
+			result = get_item_stock_qty(item_code)
+			self.assertEqual(result["stock_qty"], 0.0)
+		finally:
+			frappe.set_user(original_user)
+			frappe.delete_doc("User", user_email, force=True, ignore_permissions=True)
+
+	def test_get_item_stock_qty_scoped_to_batch(self):
+		"""A row with a Batch No picked gets that batch's own quantity, not
+		the item's overall figure."""
+		item_code, batch_no = self._create_batch_tracked_item()
+		frappe.db.set_value("Batch", batch_no, "batch_qty", 7)
+		self.assertEqual(get_item_stock_qty(item_code, batch_no)["stock_qty"], 7.0)
+		self.assertEqual(get_item_stock_qty(item_code)["stock_qty"], 0.0)
+
+	def test_resolve_scan_by_registered_barcode(self):
+		item_code = self._create_test_item_with_barcode()
+		barcode = frappe.db.get_value("Item Barcode", {"parent": item_code}, "barcode")
+		data = resolve_scan(barcode)
+		self.assertEqual(data["item"], item_code)
+		self.assertEqual(data["barcode"], barcode)
+
+	def test_resolve_scan_falls_back_to_item_code(self):
+		"""A value that isn't a registered barcode/Serial No/Batch No, but
+		is a real Item Code, still resolves - the scan box also accepts a
+		typed Item Code directly."""
+		item_code = self._create_test_item_with_barcode()
+		data = resolve_scan(item_code)
+		self.assertEqual(data["item"], item_code)
+
+	def test_resolve_scan_by_serial_no(self):
+		item_code, serials = self._create_serial_tracked_item()
+		data = resolve_scan(serials[0])
+		self.assertEqual(data["item"], item_code)
+		self.assertEqual(data["serial_no"], serials[0])
+
+	def test_resolve_scan_blocks_disabled_item(self):
+		item_code = self._create_test_item_with_barcode()
+		frappe.db.set_value("Item", item_code, "disabled", 1)
+		with self.assertRaises(frappe.ValidationError):
+			resolve_scan(item_code)
+
+	def test_resolve_scan_unknown_value_throws(self):
+		with self.assertRaises(frappe.ValidationError):
+			resolve_scan("NO-SUCH-BARCODE-OR-ITEM-XYZ")
+
+	# ---- Feature: Load from Excel/CSV (barcodes_print.api.import_items) ----
+
+	def _create_csv_file(self, rows: list) -> str:
+		"""A real "File" doctype record holding CSV content - exercises the
+		actual frappe.get_doc("File", {"file_url": ...}).get_content() path
+		import_items_from_file uses, not a mocked file read."""
+		content = "\n".join(",".join(str(c) for c in row) for row in rows)
+		file_doc = frappe.get_doc({
+			"doctype": "File",
+			"file_name": f"test-import-{frappe.generate_hash(length=6)}.csv",
+			"content": content.encode("utf-8"),
+			"is_private": 1,
+		}).insert(ignore_permissions=True)
+		return file_doc.file_url
+
+	def test_batch_belongs_to_item_and_serial_lookup_helpers(self):
+		"""The shared helpers resolve_row and the CSV importer both rely on
+		for batch/serial ownership - single source of truth for this check."""
+		item_code, batch_no = self._create_batch_tracked_item()
+		other_item_code = self._create_test_item_with_barcode()
+		self.assertTrue(batch_belongs_to_item(batch_no, item_code))
+		self.assertFalse(batch_belongs_to_item(batch_no, other_item_code))
+		self.assertFalse(batch_belongs_to_item("NO-SUCH-BATCH", item_code))
+
+		serial_item_code, serials = self._create_serial_tracked_item()
+		found_item, found_batch = serial_no_item_and_batch(serials[0])
+		self.assertEqual(found_item, serial_item_code)
+		self.assertEqual(found_batch, "")
+		missing_item, missing_batch = serial_no_item_and_batch("NO-SUCH-SERIAL")
+		self.assertIsNone(missing_item)
+		self.assertIsNone(missing_batch)
+
+	def test_import_items_from_file_valid_rows(self):
+		item_a = self._create_test_item_with_barcode()
+		item_b = self._create_test_item_with_barcode()
+		file_url = self._create_csv_file([
+			["item_code", "qty"],
+			[item_a, 3],
+			[item_b, 1],
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(result["errors"], [])
+		self.assertEqual(len(result["rows"]), 2)
+		self.assertEqual(result["rows"][0]["item"], item_a)
+		self.assertEqual(result["rows"][0]["no_of_barcodes"], 3)
+		self.assertEqual(result["rows"][1]["item"], item_b)
+
+	def test_import_items_from_file_accepts_header_synonyms(self):
+		"""sku/quantity/copies are all accepted as synonyms for
+		item_code/no_of_barcodes, matching the flexible header mapping."""
+		item_code = self._create_test_item_with_barcode()
+		file_url = self._create_csv_file([
+			["SKU", "Quantity"],
+			[item_code, 7],
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(result["errors"], [])
+		self.assertEqual(result["rows"][0]["item"], item_code)
+		self.assertEqual(result["rows"][0]["no_of_barcodes"], 7)
+
+	def test_import_items_from_file_reports_bad_rows_without_failing_the_file(self):
+		"""A row with an unknown Item Code is skipped and reported - the
+		other, valid row in the same file still comes through."""
+		item_code = self._create_test_item_with_barcode()
+		file_url = self._create_csv_file([
+			["item_code", "qty"],
+			[item_code, 2],
+			["NO-SUCH-ITEM-CODE", 1],
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(len(result["rows"]), 1)
+		self.assertEqual(result["rows"][0]["item"], item_code)
+		self.assertEqual(len(result["errors"]), 1)
+		self.assertIn("NO-SUCH-ITEM-CODE", result["errors"][0])
+
+	def test_import_items_from_file_validates_batch_and_serial_ownership(self):
+		item_code, batch_no = self._create_batch_tracked_item()
+		other_item_code, other_batch_no = self._create_batch_tracked_item()
+		serial_item_code, serials = self._create_serial_tracked_item()
+
+		file_url = self._create_csv_file([
+			["item_code", "qty", "batch_no", "serial_nos"],
+			[item_code, 1, batch_no, ""],  # valid batch for this item
+			[item_code, 1, other_batch_no, ""],  # batch belongs to a different item
+			[serial_item_code, 1, "", serials[0]],  # valid serial for this item
+			[item_code, 1, "", serials[0]],  # serial belongs to a different item
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(len(result["rows"]), 2)
+		self.assertEqual(result["rows"][0]["batch_no"], batch_no)
+		self.assertEqual(result["rows"][1]["serial_nos"], serials[0])
+		self.assertEqual(len(result["errors"]), 2)
+		self.assertTrue(any(other_batch_no in e for e in result["errors"]))
+		self.assertTrue(any(serials[0] in e and "belongs to Item" in e for e in result["errors"]))
+
+	def test_import_items_from_file_rejects_disabled_items_and_bad_quantities(self):
+		item_code = self._create_test_item_with_barcode()
+		frappe.db.set_value("Item", item_code, "disabled", 1)
+		zero_qty_item = self._create_test_item_with_barcode()
+
+		file_url = self._create_csv_file([
+			["item_code", "qty"],
+			[item_code, 1],
+			[zero_qty_item, 0],
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(result["rows"], [])
+		self.assertEqual(len(result["errors"]), 2)
+
+	def test_import_items_from_file_rejects_file_over_row_limit(self):
+		import barcodes_print.api.import_items as import_items_module
+
+		item_code = self._create_test_item_with_barcode()
+		original_max = import_items_module.MAX_IMPORT_ROWS
+		import_items_module.MAX_IMPORT_ROWS = 2
+		try:
+			file_url = self._create_csv_file([
+				["item_code", "qty"],
+				[item_code, 1],
+				[item_code, 1],
+				[item_code, 1],
+			])
+			with self.assertRaises(frappe.ValidationError):
+				import_items_from_file(file_url)
+		finally:
+			import_items_module.MAX_IMPORT_ROWS = original_max
+
+	def test_import_items_from_file_blank_rows_are_skipped_silently(self):
+		"""A fully blank spreadsheet row (common trailing-rows artifact from
+		spreadsheet software) is skipped without being reported as an error,
+		unlike a row with real but invalid data."""
+		item_code = self._create_test_item_with_barcode()
+		file_url = self._create_csv_file([
+			["item_code", "qty"],
+			[item_code, 1],
+			["", ""],
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(len(result["rows"]), 1)
+		self.assertEqual(result["errors"], [])
+
+	def test_import_items_from_file_skips_downloaded_template_preamble(self):
+		"""The Download Template button writes an instructional preamble
+		(title, warnings, a "------" line) before the real header row,
+		matching Frappe's own native grid bulk-edit download - re-uploading
+		that exact file must find the real header by content, not assume
+		row 1 is it."""
+		item_code = self._create_test_item_with_barcode()
+		file_url = self._create_csv_file([
+			["Barcode Print - Bulk Item Template"],
+			[],
+			["The CSV format is case sensitive"],
+			["Do not edit the header row below"],
+			["------"],
+			["item_code", "qty"],
+			[item_code, 4],
+		])
+		result = import_items_from_file(file_url)
+		self.assertEqual(result["errors"], [])
+		self.assertEqual(len(result["rows"]), 1)
+		self.assertEqual(result["rows"][0]["item"], item_code)
+		self.assertEqual(result["rows"][0]["no_of_barcodes"], 4)

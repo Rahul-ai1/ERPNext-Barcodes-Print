@@ -48,14 +48,14 @@
    "fieldname": "show_item_name",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Item Name"
+   "label": "Name"
   },
   {
    "default": "1",
    "fieldname": "show_item_code",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Item Code"
+   "label": "Code"
   },
   {
    "fieldname": "column_break_display_1",
@@ -66,14 +66,14 @@
    "fieldname": "show_barcode_number",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Barcode Number"
+   "label": "Barcode"
   },
   {
    "default": "1",
    "fieldname": "show_barcode_type",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Barcode Type"
+   "label": "Type"
   },
   {
    "fieldname": "column_break_display_2",
@@ -91,7 +91,7 @@
    "fieldname": "show_rate",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Rate / Price"
+   "label": "Rate"
   },
   {
    "fieldname": "column_break_display_3",
@@ -99,24 +99,24 @@
   },
   {
    "default": "1",
-   "description": "Whether a resolved Batch No shows as a text line. Does not control whether Batch No can be picked/encoded - see Batch/Serial Printing in Settings for that.",
+   "description": "Shows Batch No as text. Doesn't control if Batch No can be printed at all - see Batch/Serial Printing above.",
    "fieldname": "show_batch_no",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Batch No"
+   "label": "Batch"
   },
   {
    "default": "1",
-   "description": "Whether a resolved Serial No shows as a text line. Does not control whether Serial No can be picked/encoded - see Batch/Serial Printing in Settings for that.",
+   "description": "Shows Serial No as text. Doesn't control if Serial No can be printed at all - see Batch/Serial Printing above.",
    "fieldname": "show_serial_no",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Serial No"
+   "label": "Serial"
   }
  ],
  "istable": 1,
  "links": [],
- "modified": "2026-10-29 06:10:20.755425",
+ "modified": "2026-10-29 14:11:08.383487",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Label Display Rule",
