@@ -10,6 +10,8 @@
   "barcode",
   "barcode_type",
   "uom",
+  "batch_no",
+  "serial_no",
   "column_break_main",
   "no_of_barcodes",
   "printed_count",
@@ -61,6 +63,22 @@
    "fieldtype": "Link",
    "label": "UOM",
    "options": "UOM",
+   "read_only": 1
+  },
+  {
+   "fieldname": "batch_no",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Batch No",
+   "options": "Batch",
+   "read_only": 1
+  },
+  {
+   "fieldname": "serial_no",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Serial No",
+   "options": "Serial No",
    "read_only": 1
   },
   {
@@ -170,7 +188,7 @@
  "in_create": 1,
  "is_submittable": 0,
  "links": [],
- "modified": "2026-09-16 00:00:00.000000",
+ "modified": "2026-09-30 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Log",

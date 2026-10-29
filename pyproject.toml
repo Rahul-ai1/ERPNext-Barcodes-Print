@@ -5,9 +5,15 @@ description = "Generate and print barcode labels for thermal barcode printers"
 requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]
+license = { text = "MIT" }
+keywords = ["barcode", "label printing", "zpl", "qz tray", "erpnext", "frappe"]
 dependencies = [
     "python-barcode>=0.15.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Rahul-ai1/ERPNext-Barcodes-Print"
+Repository = "https://github.com/Rahul-ai1/ERPNext-Barcodes-Print"
 
 [build-system]
 requires = ["flit_core >=3.4,<4"]

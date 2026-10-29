@@ -61,6 +61,59 @@ barcodes_print.print_barcode_page.prompt_barcode_choice = function (row, choices
 	);
 };
 
+// Shown automatically right after picking a serial-tracked Item (and again
+// if Batch No changes on one), so the user can pick exactly which physical
+// units this print run covers - one label prints per Serial No selected
+// here, each encoding that exact Serial No so scanning it anywhere in
+// ERPNext later resolves Item + Batch automatically (see api/zpl.py
+// resolve_row). Cancelling just leaves serial_nos as it was; there's no
+// forced choice the way there is for an ambiguous plain barcode.
+barcodes_print.print_barcode_page.prompt_serial_no_choice = function (row, item_code, batch_no) {
+	frappe.call({
+		method: "barcodes_print.api.item.get_available_serial_nos",
+		args: { item_code, batch_no: batch_no || "" },
+	}).then((r) => {
+		const available = r.message || [];
+		if (!available.length) {
+			frappe.show_alert({
+				message: __("No available Serial Nos found for {0}.", [item_code]),
+				indicator: "orange",
+			});
+			return;
+		}
+
+		const already_selected = new Set((row.doc.serial_nos || "").split("\n").filter(Boolean));
+		const dialog = new frappe.ui.Dialog({
+			title: __("Select Serial Nos"),
+			fields: [
+				{
+					fieldname: "serials",
+					fieldtype: "MultiCheck",
+					label: __("Select which units this print run is for"),
+					options: available.map((s) => ({
+						label: s.batch_no ? `${s.name} (${s.batch_no})` : s.name,
+						value: s.name,
+						checked: already_selected.has(s.name),
+					})),
+					columns: 2,
+				},
+			],
+			primary_action_label: __("Use Selected"),
+			primary_action(values) {
+				const selected = values.serials || [];
+				if (!selected.length) {
+					frappe.msgprint(__("Select at least one Serial No, or close this dialog to leave it unchanged."));
+					return;
+				}
+				row.doc.serial_nos = selected.join("\n");
+				row.refresh_field("serial_nos");
+				dialog.hide();
+			},
+		});
+		dialog.show();
+	});
+};
+
 // Re-fetches this row's rate for whatever Item + Price List it currently
 // has - called after either one changes. Leaves rate blank (server-side,
 // that means None -> the label prints "N/A") when there's no Item yet or
@@ -75,7 +128,7 @@ barcodes_print.print_barcode_page._refresh_row_rate = function (row) {
 	}
 	frappe.call({
 		method: "barcodes_print.api.item.get_item_barcode_details",
-		args: { item_code, price_list },
+		args: { item_code, price_list, tax_template: row.doc.tax_template || "" },
 		callback(r) {
 			row.doc.rate = (r.message || {}).rate;
 			row.refresh_field("rate");
@@ -83,8 +136,23 @@ barcodes_print.print_barcode_page._refresh_row_rate = function (row) {
 	});
 };
 
-barcodes_print.print_barcode_page.get_item_fields = function (default_price_list) {
-	return [
+barcodes_print.print_barcode_page.get_item_fields = function (default_price_list, batch_serial_mode) {
+	// Batch/Serial Printing (site-wide, in Settings) - when a type is off
+	// there, its column/picker doesn't appear here at all, rather than
+	// appearing but never doing anything.
+	const batch_enabled = batch_serial_mode !== "Serial Only" && batch_serial_mode !== "Neither";
+	const serial_enabled = batch_serial_mode !== "Batch Only" && batch_serial_mode !== "Neither";
+
+	// Only ever touch fields that actually exist as grid columns - a
+	// disabled type's field isn't just hidden, it's left out of the field
+	// list entirely, so refresh_field("batch_no")/("serial_nos") would
+	// throw if called unconditionally below.
+	const batch_serial_fieldnames = [
+		...(batch_enabled ? ["batch_no"] : []),
+		...(serial_enabled ? ["serial_nos"] : []),
+	];
+
+	const fields = [
 		{
 			fieldname: "item",
 			fieldtype: "Link",
@@ -96,18 +164,24 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 				const row = this.grid_row;
 				const item_code = this.value;
 				if (!item_code) {
-					["item_name", "uom", "barcode", "barcode_type"].forEach((f) => {
+					["item_name", "uom", "barcode", "barcode_type", ...batch_serial_fieldnames].forEach((f) => {
 						row.doc[f] = "";
 						row.refresh_field(f);
 					});
 					row.doc.rate = null;
 					row.refresh_field("rate");
+					row.doc._has_batch_no = 0;
+					row.doc._has_serial_no = 0;
 					barcodes_print.print_barcode_page.update_total();
 					return;
 				}
 				frappe.call({
 					method: "barcodes_print.api.item.get_item_barcode_details",
-					args: { item_code, price_list: row.doc.price_list || "" },
+					args: {
+						item_code,
+						price_list: row.doc.price_list || "",
+						tax_template: row.doc.tax_template || "",
+					},
 					callback(r) {
 						const data = r.message || {};
 						row.doc.item_name = data.item_name || "";
@@ -115,16 +189,40 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 						row.doc.barcode = data.barcode || "";
 						row.doc.barcode_type = data.barcode_type || "";
 						row.doc.rate = data.rate;
-						["item_name", "uom", "barcode", "barcode_type", "rate"].forEach((f) => row.refresh_field(f));
+						// A different Item invalidates any Batch No/Serial
+						// Nos picked for the previous one.
+						if (batch_enabled) row.doc.batch_no = "";
+						if (serial_enabled) row.doc.serial_nos = "";
+						row.doc._has_batch_no = data.has_batch_no;
+						row.doc._has_serial_no = data.has_serial_no;
+						["item_name", "uom", "barcode", "barcode_type", "rate", ...batch_serial_fieldnames].forEach(
+							(f) => row.refresh_field(f)
+						);
 
 						// More than one barcode on this Item: the server
 						// deliberately leaves Barcode blank rather than
 						// guessing (data.barcode is "" here) - ask which
 						// one to use instead of silently picking the
 						// first row in the Item's own Barcodes table.
+						// If exactly one row is marked Default, the server
+						// already resolved data.barcode above - no prompt,
+						// but the dropdown below still lets the user pick
+						// a different one for this print.
 						const choices = data.barcodes || [];
-						if (choices.length > 1) {
+						if (choices.length > 1 && !data.barcode) {
 							barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
+						}
+
+						// Serial-tracked: ask which physical units are being
+						// labelled right away, same as the barcode-choice
+						// prompt above - Batch No is picked separately below
+						// (a Link field of its own) if the item only tracks
+						// batches, not individual serials. Already gated
+						// server-side by Batch/Serial Printing - data.has_serial_no
+						// is 0 whenever that's off, regardless of the Item's
+						// own tracking.
+						if (data.has_serial_no) {
+							barcodes_print.print_barcode_page.prompt_serial_no_choice(row, item_code, "");
 						}
 					},
 				});
@@ -134,6 +232,37 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 		{ fieldname: "uom", fieldtype: "Link", options: "UOM", in_list_view: 1, label: __("UOM"), read_only: 1 },
 		{ fieldname: "barcode", fieldtype: "Data", in_list_view: 1, label: __("Barcode"), read_only: 1 },
 		{ fieldname: "barcode_type", fieldtype: "Data", in_list_view: 1, label: __("Barcode Type"), read_only: 1 },
+	];
+
+	if (batch_enabled) {
+		fields.push({
+			fieldname: "batch_no",
+			fieldtype: "Link",
+			options: "Batch",
+			in_list_view: 1,
+			label: __("Batch No"),
+			get_query: function (doc) {
+				return { filters: { item: doc.item, disabled: 0 } };
+			},
+			onchange: function () {
+				const row = this.grid_row;
+				if (row.doc._has_serial_no && row.doc.item) {
+					barcodes_print.print_barcode_page.prompt_serial_no_choice(row, row.doc.item, this.value || "");
+				}
+			},
+		});
+	}
+	if (serial_enabled) {
+		fields.push({
+			fieldname: "serial_nos",
+			fieldtype: "Small Text",
+			in_list_view: 1,
+			label: __("Serial Nos"),
+			read_only: 1,
+		});
+	}
+
+	fields.push(
 		{
 			fieldname: "no_of_barcodes",
 			fieldtype: "Int",
@@ -165,20 +294,51 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 			},
 		},
 		{
+			fieldname: "company",
+			fieldtype: "Link",
+			options: "Company",
+			in_list_view: 1,
+			label: __("Company"),
+			default: frappe.defaults.get_default("company") || "",
+			description: __("Used to find this Item's Tax Template. Never printed on the label."),
+			onchange: function () {
+				barcodes_print.print_barcode_page._refresh_row_rate(this.grid_row);
+			},
+		},
+		{
+			fieldname: "tax_template",
+			fieldtype: "Link",
+			options: "Item Tax Template",
+			in_list_view: 1,
+			label: __("Tax Template"),
+			description: __('If set, Rate prints "Incl. of taxes"; left blank, "Excl. of taxes". The tax % itself is never printed.'),
+			get_query: function (doc) {
+				// A convenience filter, not a requirement - Company can be
+				// blank and still let any Item Tax Template be picked
+				// directly, per "end of the day user just needs a tax value".
+				return doc.company ? { filters: { company: doc.company } } : {};
+			},
+			onchange: function () {
+				barcodes_print.print_barcode_page._refresh_row_rate(this.grid_row);
+			},
+		},
+		{
 			fieldname: "rate",
 			fieldtype: "Currency",
 			in_list_view: 1,
 			label: __("Rate / Price"),
 			read_only: 1,
-			description: __("Auto-fetched from Price List. Prints as N/A if no price is found."),
+			description: __("Auto-fetched from Price List, marked up by Tax Template's tax % if one is set. Left off the label entirely if no price is found."),
 		},
 		// Hidden bookkeeping only, never rendered as a grid column:
 		// which Purchase Order/Purchase Receipt line (if any) this row
 		// came from, so a successful print can bump that line's own
 		// printed-barcode counter.
 		{ fieldname: "source_row_name", fieldtype: "Data", hidden: 1 },
-		{ fieldname: "max_allowed", fieldtype: "Int", hidden: 1 },
-	];
+		{ fieldname: "max_allowed", fieldtype: "Int", hidden: 1 }
+	);
+
+	return fields;
 };
 
 barcodes_print.print_barcode_page.render = function (page) {
@@ -197,6 +357,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 	const $items_area = $('<div style="margin-bottom: 10px;">').appendTo($wrapper);
 	const $total_area = $('<div class="text-muted" style="margin-bottom: 20px; font-size: 13px;">').appendTo($wrapper);
 	const $size_area = $('<div style="max-width: 200px;">').appendTo($wrapper);
+	const $printer_area = $('<div class="text-muted" style="margin-top: 10px; font-size: 13px;">').appendTo($wrapper);
 
 	// The Price List column's per-row default needs Barcode Print
 	// Settings' Default Price List up front, so the grid itself isn't
@@ -206,7 +367,11 @@ barcodes_print.print_barcode_page.render = function (page) {
 	return frappe.call({
 		method: "barcodes_print.api.barcode.get_print_barcode_page_defaults",
 	}).then((r) => {
-		const default_price_list = (r.message || {}).default_price_list || "";
+		const defaults = r.message || {};
+		const default_price_list = defaults.default_price_list || "";
+		const print_connector = defaults.print_connector || "";
+		const my_default_printer = defaults.my_default_printer || "";
+		const batch_serial_print_mode = defaults.batch_serial_print_mode || "Both";
 
 		const items_control = frappe.ui.form.make_control({
 			parent: $items_area,
@@ -217,7 +382,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 				options: "Print Label Item",
 				in_place_edit: false,
 				cannot_add_rows: false,
-				fields: barcodes_print.print_barcode_page.get_item_fields(default_price_list),
+				fields: barcodes_print.print_barcode_page.get_item_fields(default_price_list, batch_serial_print_mode),
 			},
 			render_input: true,
 		});
@@ -257,14 +422,86 @@ barcodes_print.print_barcode_page.render = function (page) {
 			items_control,
 			size_control,
 			default_price_list,
+			print_connector,
+			my_default_printer,
+			batch_serial_print_mode,
 			$source_banner,
 			$total_area,
+			$printer_area,
 			source_doctype: "",
 			source_name: "",
 		};
 
 		barcodes_print.print_barcode_page.update_total();
+		barcodes_print.print_barcode_page.render_my_printer();
 	});
+};
+
+// The current user's own saved printer (see api.printer) - shown so it's
+// obvious which printer a click of "Print" will actually go to, with a
+// "Change" link into a live picker rather than a free-text field a typo
+// could silently break.
+barcodes_print.print_barcode_page.render_my_printer = function () {
+	const state = barcodes_print.print_barcode_page._state;
+	const label = state.my_default_printer
+		? __("My Printer: {0}", [state.my_default_printer])
+		: __("My Printer: not set (using the site default/OS default)");
+	state.$printer_area.empty();
+	$(`<span>${frappe.utils.escape_html(label)}</span> `).appendTo(state.$printer_area);
+	$(`<a href="#" style="margin-left: 6px;">${__("Change")}</a>`)
+		.appendTo(state.$printer_area)
+		.on("click", (e) => {
+			e.preventDefault();
+			barcodes_print.print_barcode_page.prompt_my_printer_choice();
+		});
+};
+
+// Lists live printers from whichever connector Barcode Print Settings
+// currently has active, lets the user pick one, and saves it as their own
+// default via api.printer.set_my_default_printer - scoped server-side to
+// the calling user, so this can never affect anyone else's.
+barcodes_print.print_barcode_page.prompt_my_printer_choice = function () {
+	const state = barcodes_print.print_barcode_page._state;
+	const is_zebra = state.print_connector === "Zebra Browser Print";
+	const list_printers = () =>
+		is_zebra ? barcodes_print.zebra.list_printers() : barcodes_print.qz.list_printers();
+
+	frappe.show_alert({ message: __("Looking for printers..."), indicator: "blue" });
+	list_printers()
+		.then((printers) => {
+			if (!printers || !printers.length) {
+				frappe.msgprint(
+					__("No printers were found via {0}. Make sure it's installed, running, and connected, then try again.", [
+						is_zebra ? "Zebra Browser Print" : "QZ Tray",
+					])
+				);
+				return;
+			}
+			frappe.prompt(
+				{
+					fieldname: "printer",
+					fieldtype: "Select",
+					label: __("My Printer"),
+					options: printers,
+					default: state.my_default_printer || printers[0],
+					reqd: 1,
+				},
+				(values) => {
+					frappe.call({
+						method: "barcodes_print.api.printer.set_my_default_printer",
+						args: { printer_name: values.printer },
+					}).then(() => {
+						state.my_default_printer = values.printer;
+						barcodes_print.print_barcode_page.render_my_printer();
+						frappe.show_alert({ message: __("Saved"), indicator: "green" });
+					});
+				},
+				__("Set My Printer")
+			);
+		})
+		.catch((err) => {
+			frappe.msgprint(__("Could not list printers: {0}", [err.message || err]));
+		});
 };
 
 // A live running total, updated on every row add/remove/quantity change -
@@ -274,7 +511,15 @@ barcodes_print.print_barcode_page.update_total = function () {
 	const state = barcodes_print.print_barcode_page._state;
 	if (!state) return;
 	const items = state.items_control.get_value() || [];
-	const total = items.reduce((sum, row) => sum + (cint(row.no_of_barcodes) || 0), 0);
+	// A row with Serial Nos selected prints exactly one label per serial
+	// (see api/zpl.py get_quick_print_job's row expansion), not
+	// no_of_barcodes - matching that here so the running total is accurate
+	// before the user ever clicks Print.
+	const row_count = (row) => {
+		const serials = (row.serial_nos || "").split("\n").filter(Boolean);
+		return serials.length || cint(row.no_of_barcodes) || 0;
+	};
+	const total = items.reduce((sum, row) => sum + row_count(row), 0);
 	state.$total_area.text(
 		items.length ? __("{0} label(s) across {1} item row(s) will be printed.", [total, items.length]) : ""
 	);
@@ -333,11 +578,38 @@ barcodes_print.print_barcode_page.apply_route_options = function () {
 			row.doc.source_row_name = item_row.source_row_name;
 			row.doc.max_allowed = item_row.max_allowed;
 			row.doc.price_list = state.default_price_list || "";
-			["item", "no_of_barcodes", "price_list"].forEach((f) => row.refresh_field(f));
+			// Auto-fetched straight from the source document/line (see
+			// get_purchase_document_items) - never a user/site default -
+			// so the price printed always matches what's actually on that
+			// Purchase Order/Receipt line.
+			row.doc.company = item_row.company || "";
+			row.doc.tax_template = item_row.tax_template || "";
+			// Only ever populated for a Purchase Receipt line (see
+			// get_purchase_document_items) - already resolved server-side
+			// from either the line's own batch_no/serial_no fields or its
+			// Serial and Batch Bundle, so no picker dialog is needed here.
+			// Guarded by the same Batch/Serial Printing setting the grid's
+			// own columns are built from - these fields don't exist on the
+			// row at all when a type is off.
+			const mode = state.batch_serial_print_mode || "Both";
+			const refresh_fields = ["item", "no_of_barcodes", "price_list", "company", "tax_template"];
+			if (mode !== "Serial Only" && mode !== "Neither") {
+				row.doc.batch_no = item_row.batch_no || "";
+				refresh_fields.push("batch_no");
+			}
+			if (mode !== "Batch Only" && mode !== "Neither") {
+				row.doc.serial_nos = item_row.serial_no || "";
+				refresh_fields.push("serial_nos");
+			}
+			refresh_fields.forEach((f) => row.refresh_field(f));
 
 			frappe.call({
 				method: "barcodes_print.api.item.get_item_barcode_details",
-				args: { item_code: item_row.item, price_list: row.doc.price_list },
+				args: {
+					item_code: item_row.item,
+					price_list: row.doc.price_list,
+					tax_template: row.doc.tax_template || "",
+				},
 				callback(r) {
 					const item_data = r.message || {};
 					row.doc.item_name = item_data.item_name || "";
@@ -345,10 +617,12 @@ barcodes_print.print_barcode_page.apply_route_options = function () {
 					row.doc.barcode = item_data.barcode || "";
 					row.doc.barcode_type = item_data.barcode_type || "";
 					row.doc.rate = item_data.rate;
+					row.doc._has_batch_no = item_data.has_batch_no;
+					row.doc._has_serial_no = item_data.has_serial_no;
 					["item_name", "uom", "barcode", "barcode_type", "rate"].forEach((f) => row.refresh_field(f));
 
 					const choices = item_data.barcodes || [];
-					if (choices.length > 1) {
+					if (choices.length > 1 && !item_data.barcode) {
 						barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
 					}
 				},

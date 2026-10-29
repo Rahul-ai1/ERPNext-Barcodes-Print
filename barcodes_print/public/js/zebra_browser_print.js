@@ -55,6 +55,19 @@ barcodes_print.zebra = {
 		});
 	},
 
+	// Used by the Print Barcode page's "My Printer" picker - the live list
+	// of printers Zebra Browser Print can see on this PC.
+	list_printers() {
+		this._check_sdk();
+		return new Promise((resolve, reject) => {
+			BrowserPrint.getLocalDevices(
+				(devices) => resolve((devices || []).map((d) => d.name || d.uid).filter(Boolean)),
+				(err) => reject(new Error(err)),
+				"printer"
+			);
+		});
+	},
+
 	async print(job) {
 		this._check_sdk();
 		const device = await this.get_device(job.printer);

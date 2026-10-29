@@ -1,19 +1,23 @@
 # Barcodes Print
 
+[![CI](https://github.com/Rahul-ai1/ERPNext-Barcodes-Print/actions/workflows/ci.yml/badge.svg)](https://github.com/Rahul-ai1/ERPNext-Barcodes-Print/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](license.txt)
+
 Direct-to-printer **barcode label printing** for ERPNext, via QZ Tray or Zebra Browser Print.
 
 You add items (or open it straight from a submitted Purchase Order/Purchase Receipt), pick a label size, and click Print — the label goes straight to a local thermal printer as raw ZPL. No print preview, no browser print dialog, no PDF step.
+
+## User Manual
+
+[![Download User Manual (PDF)](https://img.shields.io/badge/User%20Manual-Download%20PDF-0076DB?style=for-the-badge)](https://github.com/Rahul-ai1/ERPNext-Barcodes-Print/raw/main/docs/Barcodes_Print_User_Manual.pdf)
+
+Step-by-step guide to every screen and setting — [download the User Manual (PDF)](https://github.com/Rahul-ai1/ERPNext-Barcodes-Print/raw/main/docs/Barcodes_Print_User_Manual.pdf).
 
 ## Why this matters
 
 Standard ERPNext barcode printing means generating a print format, opening a browser print-preview screen, and sending it through the OS print dialog — slow for a warehouse doing this dozens of times a day, and it renders barcodes as an image rather than native printer commands, which prints noticeably softer/slower on thermal printers than the printer's own barcode engine. There's also no size-aware protection against printing an unscannable code (a QR code squeezed onto a tiny label with too many other fields on it will fail to scan in practice, not just in theory), and no record of who printed what, when, or how many — reprints for damaged labels happen with no trace and no limit.
 
 This app replaces all of that with a one-time-use print action: raw ZPL sent directly to the printer via a local desktop agent (QZ Tray, or Zebra Browser Print on Windows/macOS), label content and barcode bar width that scale to the label size you actually pick, a hard block on print combinations that would be too small to scan reliably, and an audit log of every print attempt — including failures and why.
-
-Two things worth knowing before relying on this:
-
-- **Not yet tested against a real physical printer.** Development and testing used QZ Tray's real desktop app talking to a CUPS virtual "print-to-file" queue, with each captured job rendered through [Labelary](http://labelary.com/viewer.html) to confirm it's correct — a real, working pipeline end to end, just never with actual ink on a physical label roll.
-- **The Zebra Browser Print connector is unverified on real hardware.** Zebra's Browser Print client has no public Linux build (Windows/macOS only, gated behind contacting a Zebra sales engineer for Linux), so it was built against its publicly documented JS API but has not been exercised against a live device. QZ Tray is the connector that's actually been proven working.
 
 ## What it does
 
@@ -23,16 +27,24 @@ Barcodes Print ships its own sidebar workspace and app icon, so it shows up on t
 
 **Print Barcode page.** The only way to print — add item rows (auto-fetching Item Name/UOM/Barcode/Barcode Type as you go), pick Small/Medium/Large, and print. Nothing here is ever saved as a document; a live running total keeps you honest about how many labels are about to go to the printer before you commit.
 
-If an Item has more than one barcode registered, you're asked which one to use rather than the system silently guessing the first one in the list.
+If an Item has more than one barcode registered, you're asked which one to use rather than the system silently guessing the first one in the list — unless exactly one is marked **Default** in the Item's own Barcodes table, in which case that one is picked automatically.
+
+**My Printer.** Each user can save their own default printer from a live dropdown of whatever QZ Tray/Zebra Browser Print currently sees connected — it's remembered per user (not per browser/site), and wins over the site-wide Default Label Printer whenever it's set.
 
 ![Print Barcode page with two items queued](docs/screenshots/print_barcode.png)
 
-**Purchase Order / Purchase Receipt integration (optional, off by default).** Turn it on in Settings and pick exactly one of the two document types — a **Print Barcode** button then appears on submitted documents of that type, pre-filling the page with that document's items. Each line's starting quantity defaults to whatever's still allowed (line quantity + a configurable number of extras, minus what's already been printed for that line), and a per-line **Barcodes Printed** counter tracks the running total. The limit is re-checked against the database on every print — a user can't bypass it by editing the request.
+**Batch No / Serial No.** For batch- or serial-tracked items, pick (or scan) the exact Batch No/Serial No a label run is for — the label's own barcode then encodes that Batch/Serial directly, so scanning it anywhere in ERPNext resolves the Item (and Batch, for a Serial No) automatically. One label prints per Serial No selected. Whether this is offered at all is a single site-wide switch (Both/Batch Only/Serial Only/Neither in Settings); whether the resolved Batch/Serial text actually appears on the printed label is a separate, per-size choice — the two are independent on purpose, so a company can encode Batch/Serial into every label's barcode while only showing the text on the larger sizes, for example.
+
+**Purchase Order / Purchase Receipt integration (optional, off by default).** Turn it on in Settings and pick exactly one of the two document types — a **Print Barcode** button then appears on submitted documents of that type, pre-filling the page with that document's items, including each line's own Batch No/Serial No, Company, and Tax Template straight from the document (both the legacy `use_serial_batch_fields` mode and the default Serial and Batch Bundle mode are handled). Each line's starting quantity defaults to whatever's still allowed (line quantity + a configurable number of extras, minus what's already been printed for that line), and a per-line **Barcodes Printed** counter tracks the running total. The limit is re-checked against the database on every print — a user can't bypass it by editing the request.
+
+**Rate, with or without tax.** The Rate line is pulled from a Price List (never `Item.standard_rate`) and left off the label entirely if no price is found for that Item/Price List — never a misleading "0.00" or "N/A". Optionally pick a Company and Tax Template on a row (auto-filled from your own default Company, or straight from the Purchase Order/Receipt line when printing from one) and the Rate is marked up by that template's own tax % before printing, with a short **"Incl. of taxes"** note next to it; leave Tax Template blank and it prints the plain Price List rate marked **"Excl. of taxes"**. The tax percentage and the Company/template name are never printed — only the final Rate and that one-line note.
 
 **Barcode Print Settings.** One screen controls everything:
 - **Print Connector** — QZ Tray or Zebra Browser Print, one at a time, plus the default printer name and printer DPI.
 - **Label Dimensions (mm)** — width/height for Small, Medium, and Large.
-- **Display Rules** — a table with one row per label size: independent show/hide checkboxes (Item Name, Item Code, Barcode Number, Barcode Type, UOM, Rate) and a Left/Center/Right alignment, per size. A field can be off for Small but on for Medium/Large.
+- **Batch/Serial Printing** — site-wide: Both / Batch Only / Serial Only / Neither.
+- **Display Rules** — a table with one row per label size: independent show/hide checkboxes (Item Name, Item Code, Barcode Number, Barcode Type, UOM, Rate, Batch No, Serial No) and a Left/Center/Right alignment, per size. A field can be off for Small but on for Medium/Large.
+- **Default Price List** — used to auto-fetch each row's Rate when Display Rules show it; overridable per row.
 - **Purchase Document Printing** — the enable flag, which document type, and the extra-barcodes allowance described above.
 
 ![Barcode Print Settings](docs/screenshots/settings.png)
@@ -41,13 +53,17 @@ If an Item has more than one barcode registered, you're asked which one to use r
 
 ![Barcode Print Log](docs/screenshots/print_log.png)
 
+**Dashboard.** The workspace home screen also shows live Number Cards (Print Jobs Today, Labels Printed Today, Failures Last 24h) and two charts (Success vs. Failed, Print Jobs Daily Trend) computed straight from the Print Log — a running health check with no setup required.
+
+![Barcodes Print dashboard](docs/screenshots/dashboard.png)
+
 ## Doctypes
 
 | Doctype | Type | Purpose |
 |---|---|---|
 | Barcode Print Settings | Single | Central configuration — the only doctype with one record per site. |
 | Barcode Label Display Rule | Child table | One row per label size (Small/Medium/Large): display toggles + alignment. |
-| Print Label Item | Child table | Row schema for the Print Barcode page's item grid — not a persisted business record. |
+| Print Label Item | Child table | Row schema for the Print Barcode page's item grid — not a persisted business record. Includes Batch No, Serial Nos, Company, and Tax Template. |
 | Barcode Print Log | Standalone | Audit trail of every print attempt, success or failure. |
 
 ## Pages
@@ -77,16 +93,7 @@ From then on, clicking Print on the Print Barcode page sends straight to that pr
 
 ## Compatibility
 
-Built and tested against **Frappe v16.26 / ERPNext v16.26**. The app's own code has no version-specific ERPNext customizations, so it should install cleanly on v15 too, but that hasn't been separately verified.
-
-## Known limitations / roadmap
-
-- **No real printer used in testing** — verified via QZ Tray + a virtual print-to-file queue + Labelary rendering, not physical output. Bar spacing/module width may need a small tune once tested against an actual thermal printer.
-- **Zebra Browser Print is unverified on real hardware** — built against its documented API only; no Linux client exists to test against in this environment.
-- **Barcode width estimation for Center/Right alignment is an approximation.** ZPL has no native "center this barcode" command, so its rendered width is estimated from well-known module-count figures per symbology (accurate for EAN/UPC, a reasonable estimate for Code 39/128) — visually correct in testing, but may be off by a module or two on a specific printer/firmware combination.
-- **No per-label print failure tracking.** QZ Tray/Zebra Browser Print send one combined job per print action; the Barcode Print Log's Success/Failed status is per print action, not per individual label within a multi-label job.
-- **The "Barcodes Printed" counter on Purchase Order/Receipt lines has no undo.** Once incremented after a successful print, correcting it requires a direct data edit — there's no "reverse this print" action.
-- **Stray/duplicate barcode entries on an Item aren't detected proactively** — only surfaced when that Item is selected on the Print Barcode page and its multiple-barcode prompt appears.
+Built and tested against **Frappe v16.26 / ERPNext v16.26**, with CI running the full test suite on both **Frappe v15** and **v16** on every push. Installs cleanly on **Frappe v15** too - the Desk sidebar entry and app icon are skipped there (Workspace Sidebar/Desktop Icon are Frappe v16-only doctypes), but every doctype, page, and printing feature works the same on both versions.
 
 ## Install
 
@@ -96,8 +103,6 @@ bench --site <your-site> install-app barcodes_print
 bench --site <your-site> migrate
 bench restart
 ```
-
-Requires a working Frappe bench with **ERPNext already installed** on the target site. The `migrate` step creates every doctype and seeds Barcode Print Settings with sensible defaults (QZ Tray, 203 DPI, standard Small/Medium/Large dimensions, all display toggles on except Rate) — nothing further to configure before using it, though every default is adjustable afterward in **Barcode Print Settings**. Each end user's own PC additionally needs the one-time QZ Tray setup above before they can actually print.
 
 ## License
 

@@ -20,11 +20,28 @@ barcodes_print.qz = {
 		if (this._configured) {
 			return;
 		}
-		// Unsigned connections: QZ Tray shows its own "Action Required"
-		// allow/deny popup the first time this site connects (or every
-		// time, unless the user checks "Remember this decision").
-		qz.security.setCertificatePromise((resolve) => resolve());
-		qz.security.setSignaturePromise(() => (resolve) => resolve());
+		// Signed connection: the certificate identifies this site to QZ Tray
+		// consistently (generated once server-side, never changes), and every
+		// request is signed with the matching private key, which never leaves
+		// the server - see api/qz_sign.py. Without this, QZ Tray treats the
+		// connection as anonymous and shows its "Action Required - Untrusted
+		// website" popup on every single print, for every user, since
+		// "Remember this decision" can't stick to an identity that isn't
+		// actually verifiable. With it, a user approves once, ever.
+		qz.security.setCertificatePromise((resolve, reject) => {
+			frappe.call({ method: "barcodes_print.api.qz_sign.get_certificate" })
+				.then((r) => resolve(r.message))
+				.catch(reject);
+		});
+		qz.security.setSignatureAlgorithm("SHA512");
+		qz.security.setSignaturePromise((to_sign) => (resolve, reject) => {
+			frappe.call({
+				method: "barcodes_print.api.qz_sign.sign",
+				args: { request: to_sign },
+			})
+				.then((r) => resolve(r.message))
+				.catch(reject);
+		});
 		this._configured = true;
 	},
 
@@ -51,15 +68,36 @@ barcodes_print.qz = {
 		if (printer_name) {
 			return printer_name;
 		}
+		// qz.printers.getDefault() doesn't always reject when this computer
+		// has no OS-level default printer - on some machines/QZ versions it
+		// resolves with an empty/blank value instead. Passing that straight
+		// through to qz.print() surfaces QZ Tray's own generic "A printer
+		// must be specified before printing" error instead of a message that
+		// actually tells the user what to do about it - so both the reject
+		// and the empty-resolve case are handled the same way here.
+		let default_printer;
 		try {
-			return await qz.printers.getDefault();
+			default_printer = await qz.printers.getDefault();
 		} catch (err) {
+			default_printer = null;
+		}
+		if (!default_printer) {
 			frappe.throw(
 				__(
-					"No Default Label Printer is set in Barcode Print Settings, and QZ Tray could not find a default printer either. Please set a Default Label Printer in Barcode Print Settings, or set a default printer on this computer."
+					"No Default Label Printer is set in Barcode Print Settings, and this computer has no default printer either. Please set a Default Label Printer in Barcode Print Settings, or set a default printer on this computer."
 				)
 			);
 		}
+		return default_printer;
+	},
+
+	// Used by the Print Barcode page's "My Printer" picker - the live list
+	// of printers QZ Tray can see on this PC, for a dropdown rather than
+	// a free-text field a typo could silently break.
+	async list_printers() {
+		await this.ensure_connected();
+		const printers = await qz.printers.find();
+		return Array.isArray(printers) ? printers : [printers].filter(Boolean);
 	},
 
 	async print(job) {

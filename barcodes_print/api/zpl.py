@@ -178,13 +178,27 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		text_lines_after.append(row.barcode)
 	if rules["show_barcode_type"]:
 		text_lines_after.append(row.barcode_type)
+	# Whether printing by Batch/Serial is enabled at all (site-wide) is
+	# already enforced upstream in resolve_row - row.batch_no/serial_no are
+	# never populated for a disabled type to begin with. This is purely
+	# the per-size "show the text line" choice.
+	if rules["show_batch_no"] and row.batch_no:
+		text_lines_after.append(_("Batch: {0}").format(row.batch_no))
+	if rules["show_serial_no"] and row.serial_no:
+		text_lines_after.append(_("Serial: {0}").format(row.serial_no))
 	if rules["show_uom"] and row.uom:
 		text_lines_after.append(f"UOM: {row.uom}")
-	if rules["show_rate"]:
+	if rules["show_rate"] and row.rate is not None:
 		# row.rate is None when no Item Price was found for the resolved
-		# Price List (or none was configured at all) - printed as "N/A"
-		# rather than silently showing "0.00" or skipping the line.
-		text_lines_after.append(frappe.utils.fmt_money(row.rate) if row.rate is not None else _("N/A"))
+		# Price List (or none was configured at all) - the line is left
+		# off the label entirely rather than printing "N/A" or a
+		# misleading "0.00". price_note ("Incl./Excl. of taxes") always
+		# rides on the same line - never a bare number, and never the tax
+		# % or Company name themselves, only this short note.
+		price_line = frappe.utils.fmt_money(row.rate)
+		if row.get("price_note"):
+			price_line = f"{price_line} ({row.price_note})"
+		text_lines_after.append(price_line)
 
 	n_lines = len(text_lines_before) + len(text_lines_after)
 
@@ -254,11 +268,24 @@ def resolve_row(
 	idx=1,
 	source_row_name: str = "",
 	price_list: str = "",
+	batch_no: str = "",
+	serial_no: str = "",
+	tax_template: str = "",
 ) -> "frappe._dict":
 	"""Fetch and validate everything needed to print one item row, mirroring
 	business rules 5.1/5.2: auto-fetch Item Name/Barcode/Barcode Type/UOM
 	from the Item master, block on a missing Barcode, and auto-detect the
-	Barcode Type when it's left blank (business rule 5.3)."""
+	Barcode Type when it's left blank (business rule 5.3).
+
+	A Serial No or Batch No, once given, becomes the label's own barcode
+	value in place of the Item's generic Item Barcode - overrides any
+	barcode/barcode_type also passed in. Scanning that value anywhere in
+	ERPNext (erpnext.stock.utils.scan_barcode) resolves straight back to
+	this Item - and, for a serial, its Batch too - with no change to
+	ERPNext core, since Serial No/Batch are already directly scannable
+	there. Code 128 is used regardless of the Item's own registered
+	symbology, since these are free-form Frappe document names, not
+	fixed-format retail codes."""
 	if not item_code:
 		frappe.throw(_("Item is required."))
 
@@ -266,20 +293,58 @@ def resolve_row(
 	if no_of_barcodes < 1:
 		frappe.throw(_("No. of Barcodes must be at least 1."))
 
-	details = get_item_barcode_details(item_code, barcode or "", price_list or "")
+	# Defense in depth - the Print Barcode page's own picker already never
+	# offers a type that's off in Batch/Serial Printing, but this call is a
+	# whitelisted method, so a request that supplies one directly anyway is
+	# silently ignored rather than trusted, falling back to the Item's own
+	# barcode exactly as if neither had been given.
+	mode = get_barcode_print_settings()["batch_serial_print_mode"]
+	if serial_no and mode not in ("Both", "Serial Only"):
+		serial_no = ""
+	if batch_no and mode not in ("Both", "Batch Only"):
+		batch_no = ""
+
+	if serial_no:
+		serial_doc = frappe.db.get_value("Serial No", serial_no, ["item_code", "batch_no"], as_dict=True)
+		if not serial_doc:
+			frappe.throw(_("Row #{0}: Serial No {1} was not found.").format(idx, serial_no))
+		if serial_doc.item_code != item_code:
+			frappe.throw(
+				_("Row #{0}: Serial No {1} belongs to Item {2}, not {3}.").format(
+					idx, serial_no, serial_doc.item_code, item_code
+				)
+			)
+		batch_no = batch_no or serial_doc.batch_no or ""
+		barcode = serial_no
+		barcode_type = "Code 128"
+		no_of_barcodes = 1
+	elif batch_no:
+		if not frappe.db.exists("Batch", {"name": batch_no, "item": item_code}):
+			frappe.throw(_("Row #{0}: Batch No {1} was not found for Item {2}.").format(idx, batch_no, item_code))
+		barcode = batch_no
+		barcode_type = "Code 128"
+
+	encoding_batch_or_serial = bool(serial_no or batch_no)
+	details = get_item_barcode_details(
+		item_code, "" if encoding_batch_or_serial else (barcode or ""), price_list or "", tax_template or ""
+	)
 	row = frappe._dict(
 		idx=idx,
 		item=item_code,
 		item_name=details.get("item_name") or "",
 		uom=details.get("uom") or "",
 		# None means no price was found for the resolved Price List (or
-		# none was configured) - build_label_zpl prints "N/A" for that,
-		# never a silent 0.00.
+		# none was configured) - build_label_zpl leaves the Rate line off
+		# the label entirely for that, never a silent 0.00. Already marked
+		# up by tax_template's own tax % if one was given.
 		rate=details.get("rate"),
+		price_note=details.get("price_note") or "",
 		price_list=price_list or "",
 		barcode=barcode or details.get("barcode") or "",
 		barcode_type=barcode_type or details.get("barcode_type") or "",
 		barcode_uom=details.get("barcode_uom") or "",
+		batch_no=batch_no or "",
+		serial_no=serial_no or "",
 		no_of_barcodes=no_of_barcodes,
 		source_row_name=source_row_name or "",
 	)
@@ -319,14 +384,36 @@ def _parse_items(items) -> list:
 	return items
 
 
-# Maps a Purchase Document Type (Barcode Print Settings) to its items child
-# doctype - both get the "Barcodes Printed" counter field (see
-# install.after_install.ensure_purchase_barcode_tracking_fields), so
-# switching this setting later doesn't require adding fields again.
+def _parse_serial_nos(serial_nos) -> list:
+	"""Print Label Item's serial_nos field is a newline-separated Small Text
+	(same convention as the row's own multi-select picker); also accepts a
+	plain list, in case a caller already has one."""
+	if not serial_nos:
+		return []
+	if isinstance(serial_nos, str):
+		return [s.strip() for s in serial_nos.splitlines() if s.strip()]
+	return [str(s).strip() for s in serial_nos if str(s).strip()]
+
+
+# Maps a Purchase Document Type (Barcode Print Settings, plus Subcontracting
+# Order which is always available - see is_purchase_print_enabled_for) to
+# its items child doctype - all three get the "Barcodes Printed" counter
+# field (see install.after_install.ensure_purchase_barcode_tracking_fields),
+# so switching the setting later doesn't require adding fields again.
+# Subcontracting Order's own "items" field is specifically its finished-goods
+# table - its "service_items"/"supplied_items" child tables are deliberately
+# never touched here.
 PURCHASE_ITEM_DOCTYPES = {
 	"Purchase Order": "Purchase Order Item",
 	"Purchase Receipt": "Purchase Receipt Item",
+	"Subcontracting Order": "Subcontracting Order Item",
 }
+
+
+def _is_stock_item(item_code: str) -> bool:
+	"""Service/non-stock items never get a physical barcode label - they
+	have no unit to attach one to."""
+	return bool(frappe.get_cached_value("Item", item_code, "is_stock_item"))
 
 
 def _get_purchase_line_allowance(source_doctype: str, row_name: str, max_extra: int) -> tuple[int, int]:
@@ -349,29 +436,101 @@ def _get_purchase_line_allowance(source_doctype: str, row_name: str, max_extra: 
 @frappe.whitelist()
 def is_purchase_print_enabled_for(doctype: str) -> bool:
 	"""Lightweight, permission-light check used by the Print Barcode button
-	on Purchase Order/Purchase Receipt forms (public/js/purchase_barcode_button.js).
-	Uses a raw single-value DB read rather than get_barcode_print_settings()
-	deliberately: Barcode Print Settings itself is read-restricted to
-	System Manager, but anyone who can already view the Purchase
-	Order/Purchase Receipt should be able to see whether this button
-	applies, without needing separate access to Settings."""
+	on Purchase Order/Purchase Receipt/Subcontracting Order forms
+	(public/js/purchase_barcode_button.js). Uses a raw single-value DB read
+	rather than get_barcode_print_settings() deliberately: Barcode Print
+	Settings itself is read-restricted to System Manager, but anyone who can
+	already view the source document should be able to see whether this
+	button applies, without needing separate access to Settings."""
 	enabled = frappe.db.get_single_value("Barcode Print Settings", "enable_purchase_document_printing")
+	if not enabled:
+		return False
+	if doctype == "Subcontracting Order":
+		# Not an alternative alongside Purchase Order/Purchase Receipt - this
+		# is where a *subcontracted* Purchase Order's own button redirects
+		# to, so it's available whenever purchase-document printing is on
+		# at all, regardless of which of the other two is configured.
+		return True
 	configured_doctype = frappe.db.get_single_value("Barcode Print Settings", "purchase_document_type")
-	return bool(enabled) and configured_doctype == doctype
+	return configured_doctype == doctype
+
+
+def _get_purchase_receipt_batch_serial_map(row_names: list) -> dict:
+	"""Bulk-resolve batch_no/serial_no for a set of Purchase Receipt Item
+	rows, one query each (never a DB call per row), handling both ways
+	ERPNext can record them on a line:
+
+	- use_serial_batch_fields=1 (legacy): batch_no/serial_no sit directly
+	  on the row.
+	- use_serial_batch_fields=0 (default): the row only links to a Serial
+	  and Batch Bundle - the actual batch(es)/serial(s) are its own child
+	  table rows, read here in one second bulk query.
+	"""
+	if not row_names:
+		return {}
+
+	rows = frappe.get_all(
+		"Purchase Receipt Item",
+		filters={"name": ["in", row_names]},
+		fields=["name", "use_serial_batch_fields", "batch_no", "serial_no", "serial_and_batch_bundle"],
+	)
+
+	result = {}
+	bundle_by_row = {}
+	for row in rows:
+		if frappe.utils.cint(row.use_serial_batch_fields):
+			result[row.name] = {"batch_no": row.batch_no or "", "serial_no": row.serial_no or ""}
+		elif row.serial_and_batch_bundle:
+			bundle_by_row[row.name] = row.serial_and_batch_bundle
+			result[row.name] = {"batch_no": "", "serial_no": ""}
+		else:
+			result[row.name] = {"batch_no": "", "serial_no": ""}
+
+	bundle_names = list(set(bundle_by_row.values()))
+	if bundle_names:
+		entries = frappe.get_all(
+			"Serial and Batch Entry",
+			filters={"parent": ["in", bundle_names]},
+			fields=["parent", "batch_no", "serial_no"],
+		)
+		batches_by_bundle = {}
+		serials_by_bundle = {}
+		for entry in entries:
+			if entry.serial_no:
+				serials_by_bundle.setdefault(entry.parent, []).append(entry.serial_no)
+			elif entry.batch_no:
+				batches_by_bundle.setdefault(entry.parent, set()).add(entry.batch_no)
+
+		for row_name, bundle in bundle_by_row.items():
+			serials = serials_by_bundle.get(bundle) or []
+			if serials:
+				# A serial already implies its own batch (resolve_row looks
+				# it up from the Serial No itself) - no need to also set
+				# batch_no here, and a bundle mixing several batches would
+				# have no single correct one to pick anyway.
+				result[row_name] = {"batch_no": "", "serial_no": "\n".join(serials)}
+			else:
+				batches = batches_by_bundle.get(bundle) or set()
+				result[row_name] = {"batch_no": next(iter(batches), ""), "serial_no": ""}
+
+	return result
 
 
 @frappe.whitelist()
 def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 	"""Pre-fill data for the Print Barcode page when opened via the Print
-	Barcode button on a submitted Purchase Order/Purchase Receipt. Each
-	row's starting 'No. of Barcodes' defaults to whatever is still allowed
-	(qty + Max Extra Barcodes per Line, minus what's already been printed),
-	not always 1 - matching how GRN-triggered label printing works
-	elsewhere (quantities default from what's actually on the document)."""
+	Barcode button on a submitted Purchase Order/Purchase Receipt/
+	Subcontracting Order. Each row's starting 'No. of Barcodes' always
+	defaults to that line's own quantity, never quantity + extra - the
+	Max Extra Barcodes per Line allowance (or no limit at all, in
+	unlimited_reprints mode) only ever matters if the user deliberately
+	raises the number themselves, e.g. for a torn/damaged label reprint.
+	Service/non-stock item rows are skipped outright - they have no
+	physical unit to label."""
 	settings = get_barcode_print_settings()
 	if not settings["enable_purchase_document_printing"]:
 		frappe.throw(_("Printing from a Purchase Document is not enabled in Barcode Print Settings."))
-	if settings["purchase_document_type"] != source_doctype:
+	if source_doctype != "Subcontracting Order" and settings["purchase_document_type"] != source_doctype:
 		frappe.throw(
 			_("Barcode Print Settings is currently configured for {0}, not {1}.").format(
 				settings["purchase_document_type"] or _("no document"), source_doctype
@@ -383,17 +542,61 @@ def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 	if doc.docstatus != 1:
 		frappe.throw(_("{0} must be submitted before printing barcodes.").format(source_doctype))
 
+	if source_doctype == "Purchase Order" and doc.get("is_subcontracted"):
+		frappe.throw(
+			_(
+				"{0} is subcontracted - its own items are what's being purchased from the "
+				"subcontractor, not what's being received. Print barcodes from its Subcontracting "
+				"Order instead."
+			).format(source_name)
+		)
+
+	# Subcontracting Order's own "items" field is already just the finished
+	# goods table - "service_items"/"supplied_items" are separate fields on
+	# that doctype and are never read here.
 	rows = []
 	for row in doc.items:
-		already_printed = frappe.utils.cint(row.get("custom_barcodes_printed"))
-		max_allowed = frappe.utils.cint(row.qty) + settings["max_extra_barcodes_per_line"]
-		remaining = max(0, max_allowed - already_printed)
+		if not _is_stock_item(row.item_code):
+			continue
+		qty = frappe.utils.cint(row.qty)
+		# Always defaults to the line's own quantity - never quantity + extra.
+		# The extra allowance (or no limit at all, in unlimited_reprints
+		# mode) only ever matters if the user deliberately raises this
+		# number themselves, e.g. to reprint a torn/damaged label.
+		no_of_barcodes = qty
+		max_allowed = 0
+		if not settings["unlimited_reprints"]:
+			already_printed = frappe.utils.cint(row.get("custom_barcodes_printed"))
+			max_allowed = qty + settings["max_extra_barcodes_per_line"]
+			remaining = max(0, max_allowed - already_printed)
+			# Never suggest more than the line quantity by default, but don't
+			# suggest more than what's actually still allowed either.
+			no_of_barcodes = min(qty, remaining)
+
 		rows.append({
 			"item": row.item_code,
-			"no_of_barcodes": remaining,
+			"no_of_barcodes": no_of_barcodes,
 			"source_row_name": row.name,
-			"max_allowed": remaining,
+			"max_allowed": max_allowed,
+			# Auto-fetched straight from this document/line - never from a
+			# user or site default - so the price printed always matches
+			# what's actually on the Purchase Order/Receipt. Subcontracting
+			# Order Item has no tax_template field at all, so this is
+			# simply blank there (prints as Exclusive, same as any other
+			# item with no tax template).
+			"company": doc.company,
+			"tax_template": getattr(row, "item_tax_template", "") or "",
 		})
+
+	# Only Purchase Receipt lines ever carry a real batch_no/serial_no -
+	# Purchase Order and Subcontracting Order are still just orders, with
+	# nothing actually received or assigned yet.
+	if source_doctype == "Purchase Receipt":
+		batch_serial_map = _get_purchase_receipt_batch_serial_map([r["source_row_name"] for r in rows])
+		for r in rows:
+			info = batch_serial_map.get(r["source_row_name"]) or {}
+			r["batch_no"] = info.get("batch_no", "")
+			r["serial_no"] = info.get("serial_no", "")
 
 	return {"source_doctype": source_doctype, "source_name": source_name, "items": rows}
 
@@ -433,41 +636,60 @@ def get_quick_print_job(items, size: str, source_doctype: str = "", source_name:
 		# A row can override the Price List used for its own rate; falls
 		# back to whatever's configured in Barcode Print Settings.
 		price_list = item_row.get("price_list") or settings["default_price_list"]
-		row = resolve_row(
-			item_row.get("item"),
-			item_row.get("barcode", ""),
-			item_row.get("barcode_type", ""),
-			item_row.get("no_of_barcodes", 1),
-			idx,
-			source_row_name,
-			price_list,
-		)
+		tax_template = item_row.get("tax_template") or ""
+		batch_no = item_row.get("batch_no") or ""
+		serial_nos = _parse_serial_nos(item_row.get("serial_nos"))
+		# One serial = one physical unit = exactly one label each, so a
+		# row expands into len(serial_nos) labels instead of repeating a
+		# single barcode value no_of_barcodes times.
+		row_label_count = len(serial_nos) if serial_nos else frappe.utils.cint(item_row.get("no_of_barcodes", 1)) or 1
 
-		if source_doctype and source_row_name:
+		if source_doctype and source_row_name and not settings["unlimited_reprints"]:
 			already_printed, max_allowed = _get_purchase_line_allowance(
 				source_doctype, source_row_name, settings["max_extra_barcodes_per_line"]
 			)
 			remaining = max_allowed - already_printed
-			if row.no_of_barcodes > remaining:
+			if row_label_count > remaining:
 				frappe.throw(
 					_(
 						"Row #{0}: only {1} more label(s) may be printed for this line "
-						"(limit is quantity + {2} extra, {3} already printed)."
-					).format(row.idx, max(0, remaining), settings["max_extra_barcodes_per_line"], already_printed)
+						"(limit is quantity + {2} extra, {3} already printed). Enable \"No Printing "
+						"Limit\" in Barcode Print Settings to remove this cap."
+					).format(idx, max(0, remaining), settings["max_extra_barcodes_per_line"], already_printed)
 				)
 
-		label_zpl = build_label_zpl(row, settings, size)
-		blocks.extend([label_zpl] * row.no_of_barcodes)
-		total_labels += row.no_of_barcodes
-		resolved_items.append(dict(row))
+		for serial_no in serial_nos or [""]:
+			row = resolve_row(
+				item_row.get("item"),
+				item_row.get("barcode", ""),
+				item_row.get("barcode_type", ""),
+				item_row.get("no_of_barcodes", 1),
+				idx,
+				source_row_name,
+				price_list,
+				batch_no,
+				serial_no,
+				tax_template,
+			)
+
+			label_zpl = build_label_zpl(row, settings, size)
+			blocks.extend([label_zpl] * row.no_of_barcodes)
+			total_labels += row.no_of_barcodes
+			resolved_items.append(dict(row))
 
 	width_mm_field, height_mm_field = LABEL_SIZE_SETTINGS_FIELDS[size]
+
+	# Fallback chain: this user's own saved printer, then the site-wide
+	# default, then blank - which leaves the client-side connector to fall
+	# back to the OS default printer, exactly as it already does today.
+	my_printer = frappe.db.get_value("User", frappe.session.user, "custom_default_label_printer")
+	printer = my_printer or settings["default_label_printer"]
 
 	return {
 		"zpl": "\n".join(blocks),
 		"total_labels": total_labels,
 		"connector": settings["print_connector"],
-		"printer": settings["default_label_printer"],
+		"printer": printer,
 		"label_width_mm": settings[width_mm_field],
 		"label_height_mm": settings[height_mm_field],
 		"resolved_items": resolved_items,
@@ -511,6 +733,8 @@ def log_print(
 			"barcode": item_row.get("barcode"),
 			"barcode_type": item_row.get("barcode_type"),
 			"uom": item_row.get("uom"),
+			"batch_no": item_row.get("batch_no") or "",
+			"serial_no": item_row.get("serial_no") or "",
 			"no_of_barcodes": no_of_barcodes,
 			"printed_count": no_of_barcodes if is_success else 0,
 			"failed_count": 0 if is_success else no_of_barcodes,

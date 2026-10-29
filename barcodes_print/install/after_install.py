@@ -11,14 +11,23 @@ from frappe.modules.import_file import import_file_by_path
 # dynamically from Workspace.shortcuts on install instead, which ignores
 # these files entirely. Import them explicitly so the sidebar/app-icon this
 # app ships are always in place, on install and on every migrate.
+#
+# Both doctypes are Frappe v16-only - v15 has no "Workspace Sidebar"/"Desktop
+# Icon" DocType at all, so importing these files there doesn't just fail
+# gracefully, it crashes with an ImportError trying to load a Python module
+# that was never shipped, taking down the whole install-app/migrate. Each
+# entry is paired with its DocType name so it can be skipped on a site where
+# that DocType doesn't exist, rather than assumed to always be there.
 STANDARD_FILES = [
-	("workspace_sidebar", "barcodes_print.json"),
-	("desktop_icon", "barcodes_print.json"),
+	("workspace_sidebar", "barcodes_print.json", "Workspace Sidebar"),
+	("desktop_icon", "barcodes_print.json", "Desktop Icon"),
 ]
 
 
 def sync_standard_files():
-	for folder, filename in STANDARD_FILES:
+	for folder, filename, doctype in STANDARD_FILES:
+		if not frappe.db.exists("DocType", doctype):
+			continue
 		path = frappe.get_app_path("barcodes_print", folder, filename)
 		if os.path.exists(path):
 			import_file_by_path(path, force=True)
@@ -33,6 +42,7 @@ DEFAULTS = {
 	"medium_height_mm": 50,
 	"large_width_mm": 100,
 	"large_height_mm": 75,
+	"batch_serial_print_mode": "Both",
 }
 
 # Fallback values for a fresh Display Rule row - matches the app's original
@@ -45,6 +55,8 @@ DISPLAY_RULE_DEFAULTS = {
 	"show_barcode_type": 1,
 	"show_uom": 1,
 	"show_rate": 0,
+	"show_batch_no": 1,
+	"show_serial_no": 1,
 }
 
 
@@ -52,7 +64,9 @@ def after_install():
 	sync_standard_files()
 	seed_barcode_print_settings()
 	ensure_item_barcode_types()
+	ensure_item_barcode_default_field()
 	ensure_purchase_barcode_tracking_fields()
+	ensure_user_default_printer_field()
 	ensure_display_rules()
 
 
@@ -60,8 +74,32 @@ def after_migrate():
 	sync_standard_files()
 	seed_barcode_print_settings()
 	ensure_item_barcode_types()
+	ensure_item_barcode_default_field()
 	ensure_purchase_barcode_tracking_fields()
+	ensure_user_default_printer_field()
 	ensure_display_rules()
+
+
+def ensure_user_default_printer_field():
+	"""Each user's own saved label printer (see api.printer) - a Custom
+	Field on core User, hidden from the standard User form since it's only
+	ever set via the Print Barcode page's own picker, never edited there
+	directly."""
+	if frappe.db.exists("Custom Field", {"dt": "User", "fieldname": "custom_default_label_printer"}):
+		return
+
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	create_custom_field(
+		"User",
+		{
+			"fieldname": "custom_default_label_printer",
+			"label": "Default Label Printer (Barcodes Print)",
+			"fieldtype": "Data",
+			"hidden": 1,
+			"description": "Set from the Print Barcode page's own \"My Printer\" picker - not editable here.",
+		},
+	)
 
 
 def seed_barcode_print_settings():
@@ -92,6 +130,17 @@ def ensure_display_rules():
 		doc.append("display_rules", row)
 		updated = True
 
+	# Batch No/Serial No per-size toggles were added, removed, then
+	# re-added as their own fields - a NULL column needs explicit
+	# backfilling on an existing row, not just "left unset".
+	for row in doc.display_rules or []:
+		if row.get("show_batch_no") is None:
+			row.show_batch_no = DISPLAY_RULE_DEFAULTS["show_batch_no"]
+			updated = True
+		if row.get("show_serial_no") is None:
+			row.show_serial_no = DISPLAY_RULE_DEFAULTS["show_serial_no"]
+			updated = True
+
 	if updated:
 		doc.save(ignore_permissions=True)
 
@@ -105,6 +154,11 @@ def ensure_item_barcode_types():
 	needed_options = [
 		"ITF", "ITF-14", "CODE-128", "Code 128", "Code 39",
 		"UPC-E", "QR Code", "Data Matrix", "Custom",
+		# EAN-13/GTIN-14 are vanilla v16 options, but Frappe v15 calls the
+		# first one "EAN-12" and never shipped the second at all - setting
+		# either as a barcode_type on v15 would otherwise silently blank
+		# back to "" on save, since it isn't a valid Select option there.
+		"EAN-13", "GTIN-14",
 	]
 	updated = False
 	new_options = list(current_options)
@@ -125,15 +179,43 @@ def ensure_item_barcode_types():
 		)
 
 
-def ensure_purchase_barcode_tracking_fields():
-	"""Add a 'Barcodes Printed' counter to both Purchase Order Item and
-	Purchase Receipt Item, regardless of which one Barcode Print Settings
-	currently points to - so switching that setting later doesn't need a
-	fresh field creation. Read-only, purely maintained by this app's own
-	print flow (see api.zpl.log_print)."""
+def ensure_item_barcode_default_field():
+	"""Adds the 'Default' checkbox used by the Print Barcode page to
+	auto-select a barcode when an item has more than one (see
+	overrides.item.validate_single_default_barcode for the exclusivity
+	check - this only creates the field, no backfill)."""
+	if not frappe.db.exists("DocType", "Item Barcode"):
+		return
+	if frappe.db.exists("Custom Field", {"dt": "Item Barcode", "fieldname": "custom_default"}):
+		return
+
 	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
 
-	for doctype, insert_after in (("Purchase Order Item", "qty"), ("Purchase Receipt Item", "qty")):
+	create_custom_field(
+		"Item Barcode",
+		{
+			"fieldname": "custom_default",
+			"label": "Default",
+			"fieldtype": "Check",
+			"insert_after": "barcode_type",
+			"description": "Only one barcode per item can be marked Default. Used by Barcodes Print to auto-select a barcode when an item has more than one.",
+		},
+	)
+
+
+def ensure_purchase_barcode_tracking_fields():
+	"""Add a 'Barcodes Printed' counter to Purchase Order Item, Purchase
+	Receipt Item, and Subcontracting Order Item, regardless of which one
+	Barcode Print Settings currently points to - so switching that setting
+	later doesn't need a fresh field creation. Read-only, purely maintained
+	by this app's own print flow (see api.zpl.log_print)."""
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	for doctype, insert_after in (
+		("Purchase Order Item", "qty"),
+		("Purchase Receipt Item", "qty"),
+		("Subcontracting Order Item", "qty"),
+	):
 		if not frappe.db.exists("DocType", doctype):
 			continue
 		if frappe.db.exists("Custom Field", {"dt": doctype, "fieldname": "custom_barcodes_printed"}):

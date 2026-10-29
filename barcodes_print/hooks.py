@@ -4,6 +4,10 @@ app_publisher = "Rahul Chaudhary"
 app_description = "Generate and print barcode labels for thermal barcode printers"
 app_email = "rc1248117@outlook.com"
 app_license = "MIT"
+# Read by frappe.utils.app_logo() for the app's own mark in the dock rail and
+# a dock-less sidebar's header - without this it falls back to a plain
+# letter avatar, regardless of the Dock/Sidebar fixtures' own icon fields.
+app_logo_url = "/assets/barcodes_print/icons/desktop_icons/subtle/barcodes_print.svg"
 required_apps = ["erpnext"]
 
 after_install = "barcodes_print.install.after_install.after_install"
@@ -31,14 +35,24 @@ app_include_js = [
 # here would break `bench build` for the whole site, so add it above
 # (before zebra_browser_print.js) only once the real file is in place.
 
+doc_events = {
+	"Item": {
+		"validate": "barcodes_print.overrides.item.validate_single_default_barcode",
+	}
+}
+
 doctype_js = {
-	# Purchase Order/Purchase Receipt are core ERPNext doctypes this app
-	# doesn't own - a real committed file via doctype_js, never a Client
-	# Script. Both files run on every submitted document of that type
-	# regardless of settings; the "Print Barcode" button itself only
-	# appears when Barcode Print Settings enables it for that doctype
-	# (see public/js/purchase_barcode_button.js).
+	# Purchase Order/Purchase Receipt/Subcontracting Order are core ERPNext
+	# doctypes this app doesn't own - a real committed file via doctype_js,
+	# never a Client Script. All three files run on every submitted
+	# document of that type regardless of settings; the "Print Barcode"
+	# button itself only appears when Barcode Print Settings enables it for
+	# that doctype (see public/js/purchase_barcode_button.js). Subcontracting
+	# Order support is unconditional whenever the master switch is on - it's
+	# the subcontracted-Purchase-Order exception, not an alternative choice
+	# alongside Purchase Order/Purchase Receipt.
 	"Purchase Order": "public/js/purchase_order.js",
 	"Purchase Receipt": "public/js/purchase_receipt.js",
+	"Subcontracting Order": "public/js/subcontracting_order.js",
 }
 
