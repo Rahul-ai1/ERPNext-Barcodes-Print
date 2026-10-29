@@ -49,6 +49,7 @@ DEFAULTS = {
 # global toggle defaults, before per-size rules existed.
 DISPLAY_RULE_DEFAULTS = {
 	"alignment": "Left",
+	"columns": 1,
 	"show_item_name": 1,
 	"show_item_code": 1,
 	"show_barcode_number": 1,
@@ -152,6 +153,11 @@ def ensure_display_rules():
 			updated = True
 		if row.get("show_serial_no") is None:
 			row.show_serial_no = DISPLAY_RULE_DEFAULTS["show_serial_no"]
+			updated = True
+		# Columns was added later too - a NULL on an existing row would fail
+		# the field's own mandatory check on the next save.
+		if row.get("columns") is None:
+			row.columns = DISPLAY_RULE_DEFAULTS["columns"]
 			updated = True
 
 	if updated:

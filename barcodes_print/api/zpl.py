@@ -25,6 +25,7 @@ from frappe import _
 
 from barcodes_print.api.barcode import (
 	ALL_LABEL_SIZES,
+	LABEL_SIZE_SETTINGS_FIELDS,
 	LABEL_SIZES,
 	MATRIX_FORMATS,
 	base_size_of,
@@ -45,11 +46,11 @@ from barcodes_print.api.item import (
 # so it's blocked rather than merely discouraged.
 MIN_MATRIX_SCAN_HEIGHT_MM = 10.0
 
-LABEL_SIZE_SETTINGS_FIELDS = {
-	"Small": ("small_width_mm", "small_height_mm"),
-	"Medium": ("medium_width_mm", "medium_height_mm"),
-	"Large": ("large_width_mm", "large_height_mm"),
-}
+# Gap between the two text columns on a "Columns: 2" label - see
+# _render_text_columns. The minimum label width that makes 2 columns usable
+# at all is enforced separately, at Settings-save time (see
+# api.barcode.validate_two_column_widths).
+COLUMN_GAP_MM = 2.0
 
 
 def mm_to_dots(value_mm: float, dpi: int) -> int:
@@ -180,6 +181,71 @@ def _aligned_x(alignment: str, margin: int, available_width: int, content_width:
 	return max(margin, min(x, margin + max(0, available_width - content_width)))
 
 
+def _split_into_columns(lines: list, columns: int = 2) -> list:
+	"""Evenly split an ordered list of text lines across `columns` side-by-
+	side columns, left-to-right by count: column 1 gets the first half
+	(rounding up), column 2 the rest - the same top-to-bottom field order
+	used everywhere else on this label. Only 2 columns are offered today
+	(Barcode Label Display Rule's own Columns field is "1"/"2" only)."""
+	if columns <= 1 or not lines:
+		return [lines]
+	mid = -(-len(lines) // columns)
+	return [lines[:mid], lines[mid:]]
+
+
+def _truncate_to_column_width(text: str, max_width_dots: int, text_h: int) -> str:
+	"""A single ^FB text line is given half the label's usual width in
+	2-column mode - a line as long as the Rate's "249.50 (Incl. of taxes)"
+	can overflow a column's width. ^FB's own single-line overflow behavior
+	renders as overlapping/garbled text rather than a clean clip, so this
+	guards against that directly instead of relying on it. Zebra's built-in
+	A0 font averages roughly 0.6x its height per character - conservative
+	enough to avoid underestimating and still overflowing."""
+	avg_char_width = max(1, round(text_h * 0.6))
+	max_chars = max(1, max_width_dots // avg_char_width)
+	if len(text) <= max_chars:
+		return text
+	if max_chars <= 1:
+		return text[:max_chars]
+	return text[: max_chars - 1] + "…"
+
+
+def _render_text_columns(
+	lines: list,
+	margin: int,
+	available_width: int,
+	column_gap_dots: int,
+	alignment: str,
+	text_h: int,
+	line_gap: int,
+	y: int,
+) -> tuple:
+	"""Render `lines` split into 2 side-by-side columns (see
+	_split_into_columns) - shared by build_label_zpl and
+	_build_label_only_zpl so the two can't drift apart. Each column is
+	independently Left/Center/Right-aligned within its OWN width, not the
+	full label width, so the existing Alignment field stays meaningful at 2
+	columns instead of only ever left-justifying. Returns
+	(zpl_field_lines, new_y)."""
+	fb_justify = {"Left": "L", "Center": "C", "Right": "R"}.get(alignment, "L")
+	col1_lines, col2_lines = _split_into_columns(lines, 2)
+	col_width = (available_width - column_gap_dots) // 2
+	col_x = (margin, margin + col_width + column_gap_dots)
+
+	zpl_lines = []
+	rows = max(len(col1_lines), len(col2_lines))
+	for row_idx in range(rows):
+		row_y = y + row_idx * line_gap
+		if row_idx < len(col1_lines):
+			text = _truncate_to_column_width(col1_lines[row_idx], col_width, text_h)
+			zpl_lines.append(_text_line_zpl(col_x[0], row_y, col_width, fb_justify, text_h, text))
+		if row_idx < len(col2_lines):
+			text = _truncate_to_column_width(col2_lines[row_idx], col_width, text_h)
+			zpl_lines.append(_text_line_zpl(col_x[1], row_y, col_width, fb_justify, text_h, text))
+
+	return zpl_lines, y + rows * line_gap
+
+
 def build_label_zpl(row, settings: dict, size: str) -> str:
 	"""Build the ZPL for exactly one physical label (^XA ... ^XZ)."""
 	if is_label_only_size(size):
@@ -188,6 +254,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 	width_dots, height_dots = get_label_dimensions_dots(settings, size)
 	rules = settings["display_rules"][size]
 	alignment = rules.get("alignment") or "Left"
+	columns = frappe.utils.cint(rules.get("columns")) or 1
 
 	is_valid, resolved_fmt, err_msg = validate_barcode_compatibility(row.barcode, row.barcode_type)
 	if not is_valid:
@@ -234,6 +301,9 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		text_lines_after.append(price_line)
 
 	n_lines = len(text_lines_before) + len(text_lines_after)
+	# With 2 columns, the text needs roughly half as many vertical rows -
+	# that's real room freed up for the barcode, not just a cosmetic change.
+	n_rows = -(-n_lines // 2) if columns == 2 else n_lines
 
 	# Text height AND barcode bar width both scale with the chosen label
 	# size - using a fixed module width/margin regardless of size was the
@@ -251,7 +321,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 
 	barcode_height_dots = max(
 		min_barcode_height,
-		height_dots - (2 * margin) - (n_lines * line_gap) - barcode_gap,
+		height_dots - (2 * margin) - (n_rows * line_gap) - barcode_gap,
 	)
 
 	if resolved_fmt in MATRIX_FORMATS:
@@ -270,24 +340,38 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 	available_width = width_dots - (2 * margin)
 	fb_justify = {"Left": "L", "Center": "C", "Right": "R"}.get(alignment, "L")
 
-	y = margin
-	for text in text_lines_before:
-		# No barcode does its own native justification the way ^FB gives
-		# text - so the barcode below is positioned manually further down
-		# using an estimated rendered width instead.
-		lines.append(_text_line_zpl(margin, y, available_width, fb_justify, text_h, text))
-		y += line_gap
-
+	# No barcode does its own native justification the way ^FB gives text -
+	# so it's positioned manually using an estimated rendered width instead.
 	barcode_width_dots = _estimate_barcode_width_dots(resolved_fmt, row.barcode, barcode_height_dots, module_width_dots)
 	barcode_x = _aligned_x(alignment, margin, available_width, barcode_width_dots)
 	barcode_zpl = _barcode_field_zpl(resolved_fmt, row.barcode, barcode_height_dots)
-	lines.append(f"^FO{barcode_x},{y}^BY{module_width_dots},3,{barcode_height_dots}")
-	lines.append(barcode_zpl)
-	y += barcode_height_dots + barcode_gap
 
-	for text in text_lines_after:
-		lines.append(_text_line_zpl(margin, y, available_width, fb_justify, text_h, text))
-		y += line_gap
+	if columns == 2:
+		# Barcode always stays full-width at the top in 2-column mode - only
+		# the text fields split into side-by-side columns, below it.
+		y = margin
+		lines.append(f"^FO{barcode_x},{y}^BY{module_width_dots},3,{barcode_height_dots}")
+		lines.append(barcode_zpl)
+		y += barcode_height_dots + barcode_gap
+
+		column_gap_dots = mm_to_dots(COLUMN_GAP_MM, settings["printer_dpi"])
+		col_lines, y = _render_text_columns(
+			text_lines_before + text_lines_after, margin, available_width, column_gap_dots, alignment, text_h, line_gap, y
+		)
+		lines.extend(col_lines)
+	else:
+		y = margin
+		for text in text_lines_before:
+			lines.append(_text_line_zpl(margin, y, available_width, fb_justify, text_h, text))
+			y += line_gap
+
+		lines.append(f"^FO{barcode_x},{y}^BY{module_width_dots},3,{barcode_height_dots}")
+		lines.append(barcode_zpl)
+		y += barcode_height_dots + barcode_gap
+
+		for text in text_lines_after:
+			lines.append(_text_line_zpl(margin, y, available_width, fb_justify, text_h, text))
+			y += line_gap
 
 	lines.append("^XZ")
 	return "\n".join(lines)
@@ -302,6 +386,7 @@ def _build_label_only_zpl(row, settings: dict, size: str) -> str:
 	width_dots, height_dots = get_label_dimensions_dots(settings, size)
 	rules = settings["display_rules"][size]
 	alignment = rules.get("alignment") or "Left"
+	columns = frappe.utils.cint(rules.get("columns")) or 1
 
 	text_lines = []
 	if rules["show_item_name"] and row.item_name:
@@ -324,9 +409,14 @@ def _build_label_only_zpl(row, settings: dict, size: str) -> str:
 	fb_justify = {"Left": "L", "Center": "C", "Right": "R"}.get(alignment, "L")
 
 	y = margin
-	for text in text_lines:
-		lines.append(_text_line_zpl(margin, y, available_width, fb_justify, text_h, text))
-		y += line_gap
+	if columns == 2:
+		column_gap_dots = mm_to_dots(COLUMN_GAP_MM, settings["printer_dpi"])
+		col_lines, y = _render_text_columns(text_lines, margin, available_width, column_gap_dots, alignment, text_h, line_gap, y)
+		lines.extend(col_lines)
+	else:
+		for text in text_lines:
+			lines.append(_text_line_zpl(margin, y, available_width, fb_justify, text_h, text))
+			y += line_gap
 
 	lines.append("^XZ")
 	return "\n".join(lines)

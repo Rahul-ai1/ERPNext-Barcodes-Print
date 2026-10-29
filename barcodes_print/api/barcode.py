@@ -4,7 +4,8 @@
 import re
 
 import frappe
-from frappe.utils.data import cint
+from frappe import _
+from frappe.utils.data import cint, flt
 
 BARCODE_TYPE_MAP = {
 	"EAN-13": "ean13",
@@ -105,8 +106,47 @@ def base_size_of(size: str) -> str:
 	return size
 
 
+# Which Barcode Print Settings fields hold a given size's own Label
+# Dimensions (mm) - shared by api.zpl.get_label_dimensions_dots and the
+# 2-column width-floor check below, both of which need the same mapping.
+LABEL_SIZE_SETTINGS_FIELDS = {
+	"Small": ("small_width_mm", "small_height_mm"),
+	"Medium": ("medium_width_mm", "medium_height_mm"),
+	"Large": ("large_width_mm", "large_height_mm"),
+}
+
+# Below this width, two side-by-side text columns plus the gap between them
+# have no room left to be legible at any reasonable font size - this is a
+# save-time floor, not a print-time one, enforced in
+# validate_two_column_widths below.
+MIN_TWO_COLUMN_WIDTH_MM = 40.0
+
+
+def validate_two_column_widths(doc) -> None:
+	"""Blocks saving Barcode Print Settings if any Display Rule row asks for
+	2 columns on a label size too narrow to fit two readable columns - same
+	"fail loud, not silently" principle already used for the QR/Data Matrix
+	scan-height floor (see api.zpl.MIN_MATRIX_SCAN_HEIGHT_MM), but checked
+	here at save time since column count is a Settings-level choice, not a
+	per-print one, so there's never a window where an invalid combination
+	could exist in the database."""
+	for row in doc.get("display_rules") or []:
+		if cint(row.columns) != 2:
+			continue
+		width_field, _height_field = LABEL_SIZE_SETTINGS_FIELDS[base_size_of(row.label_size)]
+		width_mm = flt(doc.get(width_field))
+		if width_mm < MIN_TWO_COLUMN_WIDTH_MM:
+			frappe.throw(
+				_(
+					"{0}: 2 columns needs at least {1:.0f}mm label width, but Label Dimensions is only "
+					"{2:.0f}mm. Widen the label or switch this row back to 1 column."
+				).format(row.label_size, MIN_TWO_COLUMN_WIDTH_MM, width_mm)
+			)
+
+
 _DEFAULT_DISPLAY_RULE = {
 	"alignment": "Left",
+	"columns": 1,
 	"show_item_name": 1,
 	"show_item_code": 1,
 	"show_barcode_number": 1,
@@ -161,6 +201,7 @@ def get_barcode_print_settings() -> dict:
 			continue
 		display_rules[row.label_size] = {
 			"alignment": row.alignment or "Left",
+			"columns": cint(row.columns) or 1,
 			"show_item_name": cint(row.show_item_name),
 			"show_item_code": cint(row.show_item_code),
 			"show_barcode_number": cint(row.show_barcode_number),

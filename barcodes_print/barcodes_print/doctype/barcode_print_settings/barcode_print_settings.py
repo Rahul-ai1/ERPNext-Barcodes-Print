@@ -3,6 +3,9 @@
 
 from frappe.model.document import Document
 
+from barcodes_print.api.barcode import validate_two_column_widths
+
 
 class BarcodePrintSettings(Document):
-	pass
+	def validate(self):
+		validate_two_column_widths(self)

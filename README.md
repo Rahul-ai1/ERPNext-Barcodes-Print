@@ -51,7 +51,7 @@ If an Item has more than one barcode registered, you're asked which one to use r
 - **Print Connector** — QZ Tray or Zebra Browser Print, one at a time, plus the default printer name and printer DPI.
 - **Label Dimensions (mm)** — width/height for Small, Medium, and Large.
 - **Batch/Serial Printing** — site-wide: Both / Batch Only / Serial Only / Neither.
-- **Display Rules** — a table with one row per label size (Small/Medium/Large, plus their three **Label Only** variants): independent show/hide checkboxes and a Left/Center/Right alignment, per size. A field can be off for Small but on for Medium/Large.
+- **Display Rules** — a table with one row per label size (Small/Medium/Large, plus their three **Label Only** variants): independent show/hide checkboxes, a Left/Center/Right alignment, and a **Columns** choice (1 or 2), per size. A field can be off for Small but on for Medium/Large. **2 columns** splits that size's enabled text fields side-by-side below the barcode (the barcode itself always stays full-width) — blocked at save time if that size's own Label Dimensions is under 40mm wide, since two legible columns need the room.
 - **Default Price List** — used to auto-fetch each row's Rate when Display Rules show it; overridable per row.
 - **Purchase Document Printing** — the enable flag, which of the three document types, and the extra-barcodes allowance described above.
 
