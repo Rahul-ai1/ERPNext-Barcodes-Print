@@ -178,9 +178,10 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		text_lines_after.append(row.barcode)
 	if rules["show_barcode_type"]:
 		text_lines_after.append(row.barcode_type)
-	if rules["show_batch_no"] and row.batch_no:
+	batch_serial_mode = settings.get("batch_serial_print_mode") or "Both"
+	if batch_serial_mode in ("Both", "Batch Only") and row.batch_no:
 		text_lines_after.append(_("Batch: {0}").format(row.batch_no))
-	if rules["show_serial_no"] and row.serial_no:
+	if batch_serial_mode in ("Both", "Serial Only") and row.serial_no:
 		text_lines_after.append(_("Serial: {0}").format(row.serial_no))
 	if rules["show_uom"] and row.uom:
 		text_lines_after.append(f"UOM: {row.uom}")

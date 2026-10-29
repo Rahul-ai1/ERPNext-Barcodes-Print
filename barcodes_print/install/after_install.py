@@ -42,6 +42,7 @@ DEFAULTS = {
 	"medium_height_mm": 50,
 	"large_width_mm": 100,
 	"large_height_mm": 75,
+	"batch_serial_print_mode": "Both",
 }
 
 # Fallback values for a fresh Display Rule row - matches the app's original
@@ -54,8 +55,6 @@ DISPLAY_RULE_DEFAULTS = {
 	"show_barcode_type": 1,
 	"show_uom": 1,
 	"show_rate": 0,
-	"show_batch_no": 1,
-	"show_serial_no": 1,
 }
 
 
@@ -128,18 +127,6 @@ def ensure_display_rules():
 		row.update(DISPLAY_RULE_DEFAULTS)
 		doc.append("display_rules", row)
 		updated = True
-
-	# Batch No/Serial No toggles were added after this table already had rows
-	# on existing sites - a brand new column is NULL for every pre-existing
-	# row until explicitly backfilled, not just "left unset", so this can't
-	# rely on the field's own schema-level default alone.
-	for row in doc.display_rules or []:
-		if row.get("show_batch_no") is None:
-			row.show_batch_no = DISPLAY_RULE_DEFAULTS["show_batch_no"]
-			updated = True
-		if row.get("show_serial_no") is None:
-			row.show_serial_no = DISPLAY_RULE_DEFAULTS["show_serial_no"]
-			updated = True
 
 	if updated:
 		doc.save(ignore_permissions=True)

@@ -89,8 +89,6 @@ _DEFAULT_DISPLAY_RULE = {
 	"show_barcode_type": 1,
 	"show_uom": 1,
 	"show_rate": 0,
-	"show_batch_no": 1,
-	"show_serial_no": 1,
 }
 
 
@@ -125,8 +123,6 @@ def get_barcode_print_settings() -> dict:
 			"show_barcode_type": cint(row.show_barcode_type),
 			"show_uom": cint(row.show_uom),
 			"show_rate": cint(row.show_rate),
-			"show_batch_no": cint(row.show_batch_no),
-			"show_serial_no": cint(row.show_serial_no),
 		}
 
 	return {
@@ -145,6 +141,7 @@ def get_barcode_print_settings() -> dict:
 		"max_extra_barcodes_per_line": cint(settings.get("max_extra_barcodes_per_line") or 0),
 		"unlimited_reprints": cint(settings.get("unlimited_reprints")),
 		"default_price_list": settings.get("default_price_list") or "",
+		"batch_serial_print_mode": settings.get("batch_serial_print_mode") or "Both",
 	}
 
 

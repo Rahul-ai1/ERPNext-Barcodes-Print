@@ -1110,7 +1110,8 @@ class TestBarcodePrintManager(FrappeTestCase):
 
 	def test_build_label_zpl_prints_batch_and_serial_lines(self):
 		settings_doc = frappe.get_single("Barcode Print Settings")
-		self._set_display_rule(settings_doc, "Medium", show_batch_no=1, show_serial_no=1)
+		settings_doc.batch_serial_print_mode = "Both"
+		settings_doc.save(ignore_permissions=True)
 		settings = get_barcode_print_settings()
 
 		item_code, batch_no = self._create_batch_tracked_item()
@@ -1123,6 +1124,37 @@ class TestBarcodePrintManager(FrappeTestCase):
 		zpl2 = build_label_zpl(row2, settings, "Medium")
 		self.assertIn(f"Serial: {serials[0]}", zpl2)
 		self.assertIn(f"Batch: {batch_no}", zpl2)
+
+	def test_batch_serial_print_mode_controls_what_prints_globally(self):
+		"""The global Print Batch/Serial No setting (Both/Batch Only/Serial
+		Only/Neither) applies to every label size at once - replaces the
+		earlier per-size Show Batch No/Show Serial No checkboxes."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		item_code, batch_no = self._create_batch_tracked_item()
+		serial_item_code, serials = self._create_serial_tracked_item(batch_no=batch_no)
+
+		try:
+			settings_doc.batch_serial_print_mode = "Batch Only"
+			settings_doc.save(ignore_permissions=True)
+			settings = get_barcode_print_settings()
+			self.assertEqual(settings["batch_serial_print_mode"], "Batch Only")
+
+			row = resolve_row(item_code, no_of_barcodes=1, batch_no=batch_no)
+			zpl = build_label_zpl(row, settings, "Medium")
+			self.assertIn(f"Batch: {batch_no}", zpl)
+
+			row2 = resolve_row(serial_item_code, no_of_barcodes=1, serial_no=serials[0])
+			zpl2 = build_label_zpl(row2, settings, "Medium")
+			self.assertNotIn(f"Serial: {serials[0]}", zpl2)
+
+			settings_doc.batch_serial_print_mode = "Neither"
+			settings_doc.save(ignore_permissions=True)
+			settings = get_barcode_print_settings()
+			zpl3 = build_label_zpl(row, settings, "Medium")
+			self.assertNotIn("Batch:", zpl3)
+		finally:
+			settings_doc.batch_serial_print_mode = "Both"
+			settings_doc.save(ignore_permissions=True)
 
 	def test_get_quick_print_job_expands_one_row_per_serial_no(self):
 		"""Selecting multiple Serial Nos for one grid row must produce one

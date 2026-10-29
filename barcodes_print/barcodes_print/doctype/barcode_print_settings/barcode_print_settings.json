@@ -19,6 +19,7 @@
   "large_width_mm",
   "large_height_mm",
   "display_section",
+  "batch_serial_print_mode",
   "display_rules",
   "pricing_section",
   "default_price_list",
@@ -130,6 +131,15 @@
    "label": "Label Content (per size)"
   },
   {
+   "default": "Both",
+   "description": "Applies to every label size - whether Batch No/Serial No print at all.",
+   "fieldname": "batch_serial_print_mode",
+   "fieldtype": "Select",
+   "label": "Print Batch/Serial No",
+   "options": "Both\nBatch Only\nSerial Only\nNeither",
+   "reqd": 1
+  },
+  {
    "description": "One row per label size - what to show and its alignment.",
    "fieldname": "display_rules",
    "fieldtype": "Table",
@@ -201,7 +211,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-29 05:29:21.102873",
+ "modified": "2026-10-29 05:32:29.795959",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",
