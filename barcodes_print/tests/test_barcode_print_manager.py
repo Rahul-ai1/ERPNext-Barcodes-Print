@@ -10,6 +10,7 @@ from barcodes_print.api.barcode import get_barcode_print_settings, validate_barc
 from barcodes_print.api.item import get_item_barcode_details
 from barcodes_print.api.printer import get_my_default_printer, set_my_default_printer
 from barcodes_print.api.zpl import (
+	_get_purchase_receipt_batch_serial_map,
 	build_label_zpl,
 	get_label_dimensions_dots,
 	get_purchase_document_items,
@@ -852,6 +853,87 @@ class TestBarcodePrintManager(FrappeTestCase):
 		}).insert(ignore_permissions=True)
 		po.submit()
 		return po
+
+	def _create_purchase_receipt_item_row(self, item_row):
+		"""A single-row Purchase Receipt, left as a draft - this is only
+		ever used to test _get_purchase_receipt_batch_serial_map directly,
+		which reads Purchase Receipt Item rows regardless of docstatus, so
+		submitting (and the stock/GL postings that would trigger) is never
+		needed here. Returns the row's own name."""
+		supplier = self._get_or_create_supplier()
+		company = self._get_or_create_company()
+		warehouse = frappe.get_all("Warehouse", filters={"company": company}, limit=1)[0].name
+		item_row.setdefault("warehouse", warehouse)
+		item_row.setdefault("qty", 1)
+		item_row.setdefault("rate", 10)
+
+		pr = frappe.get_doc({
+			"doctype": "Purchase Receipt",
+			"supplier": supplier,
+			"company": company,
+			"items": [item_row],
+		}).insert(ignore_permissions=True)
+		return pr.items[0].name
+
+	def test_purchase_receipt_batch_serial_map_legacy_fields(self):
+		"""use_serial_batch_fields=1: batch_no sits directly on the row."""
+		item_code, batch_no = self._create_batch_tracked_item()
+		row_name = self._create_purchase_receipt_item_row({
+			"item_code": item_code,
+			"use_serial_batch_fields": 1,
+			"batch_no": batch_no,
+		})
+
+		result = _get_purchase_receipt_batch_serial_map([row_name])
+		self.assertEqual(result[row_name], {"batch_no": batch_no, "serial_no": ""})
+
+	def test_purchase_receipt_batch_serial_map_bundle_mode(self):
+		"""use_serial_batch_fields=0 (the default): the row only links to a
+		Serial and Batch Bundle - its entries carry the actual serials."""
+		item_code = f"TEST-ITEM-PR-SERIAL-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "Test PR Serial Item",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": "Nos",
+			"has_serial_no": 1,
+		}).insert(ignore_permissions=True)
+
+		company = self._get_or_create_company()
+		warehouse = frappe.get_all("Warehouse", filters={"company": company}, limit=1)[0].name
+		serials = []
+		for _ in range(2):
+			serial = frappe.get_doc({
+				"doctype": "Serial No",
+				"serial_no": f"TEST-PR-SN-{frappe.generate_hash(length=8)}",
+				"item_code": item_code,
+				"company": company,
+				"status": "Inactive",
+			}).insert(ignore_permissions=True)
+			serials.append(serial.name)
+
+		bundle = frappe.get_doc({
+			"doctype": "Serial and Batch Bundle",
+			"item_code": item_code,
+			"warehouse": warehouse,
+			"voucher_type": "Purchase Receipt",
+			"type_of_transaction": "Inward",
+			"has_serial_no": 1,
+			"entries": [{"serial_no": s, "qty": 1} for s in serials],
+		}).insert(ignore_permissions=True)
+
+		row_name = self._create_purchase_receipt_item_row({
+			"item_code": item_code,
+			"qty": 2,
+			"use_serial_batch_fields": 0,
+			"serial_and_batch_bundle": bundle.name,
+		})
+
+		result = _get_purchase_receipt_batch_serial_map([row_name])
+		self.assertEqual(result[row_name]["batch_no"], "")
+		self.assertEqual(set(result[row_name]["serial_no"].splitlines()), set(serials))
 
 	def test_get_purchase_document_items_excludes_service_items(self):
 		"""Service/non-stock item rows never get a physical barcode label -

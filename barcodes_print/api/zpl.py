@@ -429,6 +429,67 @@ def is_purchase_print_enabled_for(doctype: str) -> bool:
 	return configured_doctype == doctype
 
 
+def _get_purchase_receipt_batch_serial_map(row_names: list) -> dict:
+	"""Bulk-resolve batch_no/serial_no for a set of Purchase Receipt Item
+	rows, one query each (never a DB call per row), handling both ways
+	ERPNext can record them on a line:
+
+	- use_serial_batch_fields=1 (legacy): batch_no/serial_no sit directly
+	  on the row.
+	- use_serial_batch_fields=0 (default): the row only links to a Serial
+	  and Batch Bundle - the actual batch(es)/serial(s) are its own child
+	  table rows, read here in one second bulk query.
+	"""
+	if not row_names:
+		return {}
+
+	rows = frappe.get_all(
+		"Purchase Receipt Item",
+		filters={"name": ["in", row_names]},
+		fields=["name", "use_serial_batch_fields", "batch_no", "serial_no", "serial_and_batch_bundle"],
+	)
+
+	result = {}
+	bundle_by_row = {}
+	for row in rows:
+		if frappe.utils.cint(row.use_serial_batch_fields):
+			result[row.name] = {"batch_no": row.batch_no or "", "serial_no": row.serial_no or ""}
+		elif row.serial_and_batch_bundle:
+			bundle_by_row[row.name] = row.serial_and_batch_bundle
+			result[row.name] = {"batch_no": "", "serial_no": ""}
+		else:
+			result[row.name] = {"batch_no": "", "serial_no": ""}
+
+	bundle_names = list(set(bundle_by_row.values()))
+	if bundle_names:
+		entries = frappe.get_all(
+			"Serial and Batch Entry",
+			filters={"parent": ["in", bundle_names]},
+			fields=["parent", "batch_no", "serial_no"],
+		)
+		batches_by_bundle = {}
+		serials_by_bundle = {}
+		for entry in entries:
+			if entry.serial_no:
+				serials_by_bundle.setdefault(entry.parent, []).append(entry.serial_no)
+			elif entry.batch_no:
+				batches_by_bundle.setdefault(entry.parent, set()).add(entry.batch_no)
+
+		for row_name, bundle in bundle_by_row.items():
+			serials = serials_by_bundle.get(bundle) or []
+			if serials:
+				# A serial already implies its own batch (resolve_row looks
+				# it up from the Serial No itself) - no need to also set
+				# batch_no here, and a bundle mixing several batches would
+				# have no single correct one to pick anyway.
+				result[row_name] = {"batch_no": "", "serial_no": "\n".join(serials)}
+			else:
+				batches = batches_by_bundle.get(bundle) or set()
+				result[row_name] = {"batch_no": next(iter(batches), ""), "serial_no": ""}
+
+	return result
+
+
 @frappe.whitelist()
 def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 	"""Pre-fill data for the Print Barcode page when opened via the Print
@@ -492,6 +553,16 @@ def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 			"source_row_name": row.name,
 			"max_allowed": max_allowed,
 		})
+
+	# Only Purchase Receipt lines ever carry a real batch_no/serial_no -
+	# Purchase Order and Subcontracting Order are still just orders, with
+	# nothing actually received or assigned yet.
+	if source_doctype == "Purchase Receipt":
+		batch_serial_map = _get_purchase_receipt_batch_serial_map([r["source_row_name"] for r in rows])
+		for r in rows:
+			info = batch_serial_map.get(r["source_row_name"]) or {}
+			r["batch_no"] = info.get("batch_no", "")
+			r["serial_no"] = info.get("serial_no", "")
 
 	return {"source_doctype": source_doctype, "source_name": source_name, "items": rows}
 

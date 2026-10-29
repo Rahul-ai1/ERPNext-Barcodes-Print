@@ -515,7 +515,13 @@ barcodes_print.print_barcode_page.apply_route_options = function () {
 			row.doc.source_row_name = item_row.source_row_name;
 			row.doc.max_allowed = item_row.max_allowed;
 			row.doc.price_list = state.default_price_list || "";
-			["item", "no_of_barcodes", "price_list"].forEach((f) => row.refresh_field(f));
+			// Only ever populated for a Purchase Receipt line (see
+			// get_purchase_document_items) - already resolved server-side
+			// from either the line's own batch_no/serial_no fields or its
+			// Serial and Batch Bundle, so no picker dialog is needed here.
+			row.doc.batch_no = item_row.batch_no || "";
+			row.doc.serial_nos = item_row.serial_no || "";
+			["item", "no_of_barcodes", "price_list", "batch_no", "serial_nos"].forEach((f) => row.refresh_field(f));
 
 			frappe.call({
 				method: "barcodes_print.api.item.get_item_barcode_details",
@@ -527,6 +533,8 @@ barcodes_print.print_barcode_page.apply_route_options = function () {
 					row.doc.barcode = item_data.barcode || "";
 					row.doc.barcode_type = item_data.barcode_type || "";
 					row.doc.rate = item_data.rate;
+					row.doc._has_batch_no = item_data.has_batch_no;
+					row.doc._has_serial_no = item_data.has_serial_no;
 					["item_name", "uom", "barcode", "barcode_type", "rate"].forEach((f) => row.refresh_field(f));
 
 					const choices = item_data.barcodes || [];
