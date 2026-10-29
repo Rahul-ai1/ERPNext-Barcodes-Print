@@ -136,6 +136,27 @@ barcodes_print.print_barcode_page._refresh_row_rate = function (row) {
 	});
 };
 
+// Informational only, never printed on a label - a live on-hand figure so
+// the user has stock context before deciding how many to print. A
+// separate call from get_item_barcode_details on purpose: this is live
+// stock status, not part of what actually prints.
+barcodes_print.print_barcode_page._refresh_row_stock_qty = function (row, batch_no) {
+	const item_code = row.doc.item;
+	if (!item_code) {
+		row.doc.stock_qty = null;
+		row.refresh_field("stock_qty");
+		return;
+	}
+	frappe.call({
+		method: "barcodes_print.api.item.get_item_stock_qty",
+		args: { item_code, batch_no: batch_no || "" },
+		callback(r) {
+			row.doc.stock_qty = (r.message || {}).stock_qty;
+			row.refresh_field("stock_qty");
+		},
+	});
+};
+
 barcodes_print.print_barcode_page.get_item_fields = function (default_price_list, batch_serial_mode) {
 	// Batch/Serial Printing (site-wide, in Settings) - when a type is off
 	// there, its column/picker doesn't appear here at all, rather than
@@ -170,6 +191,8 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 					});
 					row.doc.rate = null;
 					row.refresh_field("rate");
+					row.doc.stock_qty = null;
+					row.refresh_field("stock_qty");
 					row.doc._has_batch_no = 0;
 					row.doc._has_serial_no = 0;
 					barcodes_print.print_barcode_page.update_total();
@@ -198,6 +221,10 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 						["item_name", "uom", "barcode", "barcode_type", "rate", ...batch_serial_fieldnames].forEach(
 							(f) => row.refresh_field(f)
 						);
+						// Batch No was just cleared above for this new Item, so
+						// Stock Qty starts as the Item's overall on-hand figure
+						// - the Batch No onchange handler below re-scopes it.
+						barcodes_print.print_barcode_page._refresh_row_stock_qty(row, "");
 
 						// More than one barcode on this Item: the server
 						// deliberately leaves Barcode blank rather than
@@ -249,6 +276,7 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 				if (row.doc._has_serial_no && row.doc.item) {
 					barcodes_print.print_barcode_page.prompt_serial_no_choice(row, row.doc.item, this.value || "");
 				}
+				barcodes_print.print_barcode_page._refresh_row_stock_qty(row, this.value || "");
 			},
 		});
 	}
@@ -330,6 +358,14 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 			read_only: 1,
 			description: __("Auto-fetched from Price List, marked up by Tax Template's tax % if one is set. Left off the label entirely if no price is found."),
 		},
+		{
+			fieldname: "stock_qty",
+			fieldtype: "Float",
+			in_list_view: 1,
+			label: __("Stock Qty"),
+			read_only: 1,
+			description: __("Informational only, never printed on the label. Blank for service/non-stock items; scoped to Batch No when one is picked."),
+		},
 		// Hidden bookkeeping only, never rendered as a grid column:
 		// which Purchase Order/Purchase Receipt line (if any) this row
 		// came from, so a successful print can bump that line's own
@@ -354,6 +390,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 		"Add items below, choose a label size, and print directly to your label printer. Nothing here is saved as a document - each print is a one-time action."
 	)}</p>`).appendTo($wrapper);
 
+	const $scan_area = $('<div style="margin-bottom: 10px; max-width: 320px;">').appendTo($wrapper);
 	const $import_area = $('<div style="margin-bottom: 10px;">').appendTo($wrapper);
 	const $items_area = $('<div style="margin-bottom: 10px;">').appendTo($wrapper);
 	const $total_area = $('<div class="text-muted" style="margin-bottom: 20px; font-size: 13px;">').appendTo($wrapper);
@@ -430,11 +467,13 @@ barcodes_print.print_barcode_page.render = function (page) {
 			$total_area,
 			$printer_area,
 			$import_area,
+			$scan_area,
 			source_doctype: "",
 			source_name: "",
 		};
 
 		barcodes_print.print_barcode_page.render_import_export();
+		barcodes_print.print_barcode_page.render_scan_box();
 
 		barcodes_print.print_barcode_page.update_total();
 		barcodes_print.print_barcode_page.render_my_printer();
@@ -651,6 +690,114 @@ barcodes_print.print_barcode_page.download_import_template = function () {
 	$link[0].click();
 	$link.remove();
 	URL.revokeObjectURL(url);
+};
+
+// Scan a barcode/Serial No/Batch No (or type an Item Code) to fill or
+// update a grid row, instead of always picking an Item from the dropdown
+// first - see api.item.resolve_scan for what a scan can match.
+barcodes_print.print_barcode_page.render_scan_box = function () {
+	const state = barcodes_print.print_barcode_page._state;
+	state.$scan_area.empty();
+	const scan_control = frappe.ui.form.make_control({
+		parent: state.$scan_area,
+		df: {
+			fieldname: "scan_barcode",
+			fieldtype: "Data",
+			label: __("Scan Barcode"),
+			placeholder: __("Scan or type a barcode, Serial No, Batch No, or Item Code, then press Enter"),
+		},
+		render_input: true,
+	});
+	scan_control.refresh();
+	scan_control.$input.on("keydown", (e) => {
+		if (e.key !== "Enter") return;
+		e.preventDefault();
+		const value = (scan_control.get_value() || "").trim();
+		if (!value) return;
+		barcodes_print.print_barcode_page.handle_scan_value(value);
+		scan_control.set_value("");
+	});
+};
+
+barcodes_print.print_barcode_page.handle_scan_value = function (value) {
+	const state = barcodes_print.print_barcode_page._state;
+	frappe.call({
+		method: "barcodes_print.api.item.resolve_scan",
+		args: { scanned_value: value, price_list: state.default_price_list || "" },
+		freeze: true,
+	}).then((r) => {
+		const data = r.message || {};
+		barcodes_print.print_barcode_page.apply_scan_result(data);
+	});
+};
+
+// Finds the grid row a scanned Item already has, if any - a plain item
+// matches on Item alone; a batch-tracked item also matches the scanned
+// Batch No (a different batch is a separate row, not the same one); a
+// serial-tracked item's existing row is matched so a new serial can be
+// appended to it. Searched last-added-first, so "more than one existing
+// row matches" resolves to whichever was most recently added/edited.
+barcodes_print.print_barcode_page._find_matching_scan_row = function (item_code, batch_no) {
+	const state = barcodes_print.print_barcode_page._state;
+	const grid_rows = state.items_control.grid.grid_rows || [];
+	for (let i = grid_rows.length - 1; i >= 0; i--) {
+		const row = grid_rows[i];
+		if (row.doc.item !== item_code) continue;
+		if (row.doc._has_batch_no && !row.doc._has_serial_no) {
+			if ((row.doc.batch_no || "") === (batch_no || "")) return row;
+			continue;
+		}
+		return row;
+	}
+	return null;
+};
+
+barcodes_print.print_barcode_page.apply_scan_result = function (data) {
+	const state = barcodes_print.print_barcode_page._state;
+	const item_code = data.item;
+	const batch_no = data.batch_no || "";
+	const serial_no = data.serial_no || "";
+	const existing = barcodes_print.print_barcode_page._find_matching_scan_row(item_code, batch_no);
+
+	if (existing) {
+		if (data.has_serial_no && serial_no) {
+			const serials = (existing.doc.serial_nos || "").split("\n").filter(Boolean);
+			if (!serials.includes(serial_no)) serials.push(serial_no);
+			existing.doc.serial_nos = serials.join("\n");
+			existing.refresh_field("serial_nos");
+		} else {
+			existing.doc.no_of_barcodes = cint(existing.doc.no_of_barcodes) + 1;
+			existing.refresh_field("no_of_barcodes");
+		}
+		barcodes_print.print_barcode_page._refresh_row_stock_qty(existing, existing.doc.batch_no || "");
+		barcodes_print.print_barcode_page.update_total();
+		return;
+	}
+
+	const grid = state.items_control.grid;
+	grid.add_new_row();
+	const row = grid.grid_rows[grid.grid_rows.length - 1];
+	row.doc.item = item_code;
+	row.doc.item_name = data.item_name || "";
+	row.doc.uom = data.uom || "";
+	row.doc.barcode = data.barcode || "";
+	row.doc.barcode_type = data.barcode_type || "";
+	row.doc.rate = data.rate;
+	row.doc.price_list = state.default_price_list || "";
+	row.doc._has_batch_no = data.has_batch_no;
+	row.doc._has_serial_no = data.has_serial_no;
+	const refresh_fields = ["item", "item_name", "uom", "barcode", "barcode_type", "rate", "price_list"];
+	if (data.has_batch_no && batch_no) {
+		row.doc.batch_no = batch_no;
+		refresh_fields.push("batch_no");
+	}
+	if (data.has_serial_no && serial_no) {
+		row.doc.serial_nos = serial_no;
+		refresh_fields.push("serial_nos");
+	}
+	refresh_fields.forEach((f) => row.refresh_field(f));
+	barcodes_print.print_barcode_page._refresh_row_stock_qty(row, batch_no);
+	barcodes_print.print_barcode_page.update_total();
 };
 
 // A live running total, updated on every row add/remove/quantity change -

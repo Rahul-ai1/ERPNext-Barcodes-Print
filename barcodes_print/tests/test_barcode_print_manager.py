@@ -17,7 +17,9 @@ from barcodes_print.api.item import (
 	batch_belongs_to_item,
 	get_item_barcode_details,
 	get_item_rate_and_note,
+	get_item_stock_qty,
 	get_item_tax_rate_percent,
+	resolve_scan,
 	serial_no_item_and_batch,
 )
 from barcodes_print.api.printer import get_my_default_printer, set_my_default_printer
@@ -1645,6 +1647,84 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertEqual(job["total_labels"], len(serials))
 		self.assertEqual(len(job["resolved_items"]), len(serials))
 		self.assertEqual({r["barcode"] for r in job["resolved_items"]}, set(serials))
+
+	# ---- Feature: Scan-to-fill + Stock Qty (barcodes_print.api.item) ----
+
+	def test_get_item_stock_qty_none_for_non_stock_item(self):
+		"""Service items don't track stock at all - None, not 0, so the
+		page can tell "zero in stock" apart from "doesn't track stock"."""
+		service_item = self._create_service_item()
+		self.assertIsNone(get_item_stock_qty(service_item)["stock_qty"])
+
+	def test_get_item_stock_qty_overall_for_stock_item(self):
+		"""A real stock Item with no stock ledger entries yet is still 0.0
+		(a known, tracked quantity), never None."""
+		item_code = self._create_test_item_with_barcode()
+		self.assertEqual(get_item_stock_qty(item_code)["stock_qty"], 0.0)
+
+	def test_get_item_stock_qty_works_for_a_plain_system_manager(self):
+		"""Regression test for a real bug caught only by live browser
+		testing, never by a test run as Administrator (who bypasses every
+		permission check by design): erpnext.stock.utils.get_latest_stock_qty()
+		enforces its own explicit "Item: read" permission, which a System
+		Manager role does not automatically carry for every doctype - this
+		app's own convention (get_item_barcode_details and friends) reads
+		Item data directly instead, trusting the page-level permission gate,
+		and get_item_stock_qty must do the same rather than going through
+		that core function."""
+		item_code = self._create_test_item_with_barcode()
+		user_email = f"test-stock-qty-{frappe.generate_hash(length=6)}@example.com"
+		frappe.get_doc({
+			"doctype": "User", "email": user_email, "first_name": "Stock Qty Test",
+			"send_welcome_email": 0, "roles": [{"role": "System Manager"}],
+		}).insert(ignore_permissions=True)
+		original_user = frappe.session.user
+		try:
+			frappe.set_user(user_email)
+			result = get_item_stock_qty(item_code)
+			self.assertEqual(result["stock_qty"], 0.0)
+		finally:
+			frappe.set_user(original_user)
+			frappe.delete_doc("User", user_email, force=True, ignore_permissions=True)
+
+	def test_get_item_stock_qty_scoped_to_batch(self):
+		"""A row with a Batch No picked gets that batch's own quantity, not
+		the item's overall figure."""
+		item_code, batch_no = self._create_batch_tracked_item()
+		frappe.db.set_value("Batch", batch_no, "batch_qty", 7)
+		self.assertEqual(get_item_stock_qty(item_code, batch_no)["stock_qty"], 7.0)
+		self.assertEqual(get_item_stock_qty(item_code)["stock_qty"], 0.0)
+
+	def test_resolve_scan_by_registered_barcode(self):
+		item_code = self._create_test_item_with_barcode()
+		barcode = frappe.db.get_value("Item Barcode", {"parent": item_code}, "barcode")
+		data = resolve_scan(barcode)
+		self.assertEqual(data["item"], item_code)
+		self.assertEqual(data["barcode"], barcode)
+
+	def test_resolve_scan_falls_back_to_item_code(self):
+		"""A value that isn't a registered barcode/Serial No/Batch No, but
+		is a real Item Code, still resolves - the scan box also accepts a
+		typed Item Code directly."""
+		item_code = self._create_test_item_with_barcode()
+		data = resolve_scan(item_code)
+		self.assertEqual(data["item"], item_code)
+
+	def test_resolve_scan_by_serial_no(self):
+		item_code, serials = self._create_serial_tracked_item()
+		data = resolve_scan(serials[0])
+		self.assertEqual(data["item"], item_code)
+		self.assertEqual(data["serial_no"], serials[0])
+
+	def test_resolve_scan_blocks_disabled_item(self):
+		item_code = self._create_test_item_with_barcode()
+		frappe.db.set_value("Item", item_code, "disabled", 1)
+		with self.assertRaises(frappe.ValidationError):
+			resolve_scan(item_code)
+
+	def test_resolve_scan_unknown_value_throws(self):
+		with self.assertRaises(frappe.ValidationError):
+			resolve_scan("NO-SUCH-BARCODE-OR-ITEM-XYZ")
 
 	# ---- Feature: Load from Excel/CSV (barcodes_print.api.import_items) ----
 

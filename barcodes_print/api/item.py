@@ -209,3 +209,79 @@ def get_available_serial_nos(item_code: str, batch_no: str = "") -> list:
 		order_by="creation desc",
 		limit_page_length=500,
 	)
+
+
+@frappe.whitelist()
+def get_item_stock_qty(item_code: str, batch_no: str = "") -> dict:
+	"""On-hand quantity for the Print Barcode page's informational Stock
+	Qty column - never printed on a label, purely a courtesy figure shown
+	before deciding how many to print. None (not 0) for a non-stock Item,
+	since "tracks 0 in stock" and "doesn't track stock at all" are
+	different facts worth showing differently. A separate call from
+	get_item_barcode_details deliberately - this is live stock status, not
+	part of what actually prints on the label, which is that function's
+	own single concern."""
+	if not item_code or not frappe.db.exists("Item", item_code):
+		return {"stock_qty": None}
+	if not cint(frappe.get_cached_value("Item", item_code, "is_stock_item")):
+		return {"stock_qty": None}
+
+	if batch_no:
+		qty = frappe.db.get_value("Batch", batch_no, "batch_qty")
+	else:
+		# Same figure erpnext.stock.utils.get_latest_stock_qty() returns
+		# (sum of Bin.actual_qty across every warehouse), read directly via
+		# the query builder rather than through that function - it enforces
+		# its own explicit "Item: read" permission check, which this app
+		# deliberately never requires anywhere else (get_item_barcode_details
+		# and friends read Item data directly too, trusting the page-level
+		# Barcode Print Log permission gate already passed to reach this
+		# page at all).
+		from pypika import functions as pypika_fn
+
+		bin_table = frappe.qb.DocType("Bin")
+		qty = (
+			frappe.qb.from_(bin_table)
+			.select(pypika_fn.Sum(bin_table.actual_qty))
+			.where(bin_table.item_code == item_code)
+			.run()
+		)[0][0]
+	return {"stock_qty": frappe.utils.flt(qty)}
+
+
+@frappe.whitelist()
+def resolve_scan(scanned_value: str, price_list: str = "", tax_template: str = "") -> dict:
+	"""Resolve one scan from the Print Barcode page's own Scan Barcode box
+	into everything needed to fill or update a grid row - reuses ERPNext
+	core's own scan_barcode() (Item Barcode/Serial No/Batch No, in that
+	order) and falls back to treating the input as a plain Item Code when
+	none of those match, the same latitude the box's own placeholder text
+	promises the user. Reuses get_item_barcode_details for the
+	item/rate/barcode side rather than a second copy of that logic."""
+	scanned_value = (scanned_value or "").strip()
+	if not scanned_value:
+		frappe.throw(_("Please scan or enter a value."))
+
+	from erpnext.stock.utils import scan_barcode
+
+	scan_result = scan_barcode(scanned_value) or {}
+	item_code = scan_result.get("item_code") or ""
+	batch_no = scan_result.get("batch_no") or ""
+	serial_no = scan_result.get("serial_no") or ""
+	barcode = scan_result.get("barcode") or ""
+
+	if not item_code:
+		if not frappe.db.exists("Item", scanned_value):
+			frappe.throw(
+				_("{0} did not match any Barcode, Serial No, Batch No, or Item Code.").format(scanned_value)
+			)
+		item_code = scanned_value
+
+	if cint(frappe.get_cached_value("Item", item_code, "disabled")):
+		frappe.throw(_("Item {0} is disabled.").format(item_code))
+
+	details = get_item_barcode_details(item_code, barcode=barcode, price_list=price_list, tax_template=tax_template)
+	details["item"] = item_code
+	details["batch_no"] = batch_no
+	details["serial_no"] = serial_no
+	return details
