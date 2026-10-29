@@ -192,8 +192,13 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		# row.rate is None when no Item Price was found for the resolved
 		# Price List (or none was configured at all) - the line is left
 		# off the label entirely rather than printing "N/A" or a
-		# misleading "0.00".
-		text_lines_after.append(frappe.utils.fmt_money(row.rate))
+		# misleading "0.00". price_note ("Incl./Excl. of taxes") always
+		# rides on the same line - never a bare number, and never the tax
+		# % or Company name themselves, only this short note.
+		price_line = frappe.utils.fmt_money(row.rate)
+		if row.get("price_note"):
+			price_line = f"{price_line} ({row.price_note})"
+		text_lines_after.append(price_line)
 
 	n_lines = len(text_lines_before) + len(text_lines_after)
 
@@ -265,6 +270,7 @@ def resolve_row(
 	price_list: str = "",
 	batch_no: str = "",
 	serial_no: str = "",
+	tax_template: str = "",
 ) -> "frappe._dict":
 	"""Fetch and validate everything needed to print one item row, mirroring
 	business rules 5.1/5.2: auto-fetch Item Name/Barcode/Barcode Type/UOM
@@ -319,7 +325,9 @@ def resolve_row(
 		barcode_type = "Code 128"
 
 	encoding_batch_or_serial = bool(serial_no or batch_no)
-	details = get_item_barcode_details(item_code, "" if encoding_batch_or_serial else (barcode or ""), price_list or "")
+	details = get_item_barcode_details(
+		item_code, "" if encoding_batch_or_serial else (barcode or ""), price_list or "", tax_template or ""
+	)
 	row = frappe._dict(
 		idx=idx,
 		item=item_code,
@@ -327,8 +335,10 @@ def resolve_row(
 		uom=details.get("uom") or "",
 		# None means no price was found for the resolved Price List (or
 		# none was configured) - build_label_zpl leaves the Rate line off
-		# the label entirely for that, never a silent 0.00.
+		# the label entirely for that, never a silent 0.00. Already marked
+		# up by tax_template's own tax % if one was given.
 		rate=details.get("rate"),
+		price_note=details.get("price_note") or "",
 		price_list=price_list or "",
 		barcode=barcode or details.get("barcode") or "",
 		barcode_type=barcode_type or details.get("barcode_type") or "",
@@ -568,6 +578,14 @@ def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 			"no_of_barcodes": no_of_barcodes,
 			"source_row_name": row.name,
 			"max_allowed": max_allowed,
+			# Auto-fetched straight from this document/line - never from a
+			# user or site default - so the price printed always matches
+			# what's actually on the Purchase Order/Receipt. Subcontracting
+			# Order Item has no tax_template field at all, so this is
+			# simply blank there (prints as Exclusive, same as any other
+			# item with no tax template).
+			"company": doc.company,
+			"tax_template": getattr(row, "item_tax_template", "") or "",
 		})
 
 	# Only Purchase Receipt lines ever carry a real batch_no/serial_no -
@@ -618,6 +636,7 @@ def get_quick_print_job(items, size: str, source_doctype: str = "", source_name:
 		# A row can override the Price List used for its own rate; falls
 		# back to whatever's configured in Barcode Print Settings.
 		price_list = item_row.get("price_list") or settings["default_price_list"]
+		tax_template = item_row.get("tax_template") or ""
 		batch_no = item_row.get("batch_no") or ""
 		serial_nos = _parse_serial_nos(item_row.get("serial_nos"))
 		# One serial = one physical unit = exactly one label each, so a
@@ -650,6 +669,7 @@ def get_quick_print_job(items, size: str, source_doctype: str = "", source_name:
 				price_list,
 				batch_no,
 				serial_no,
+				tax_template,
 			)
 
 			label_zpl = build_label_zpl(row, settings, size)

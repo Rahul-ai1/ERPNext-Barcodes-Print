@@ -128,7 +128,7 @@ barcodes_print.print_barcode_page._refresh_row_rate = function (row) {
 	}
 	frappe.call({
 		method: "barcodes_print.api.item.get_item_barcode_details",
-		args: { item_code, price_list },
+		args: { item_code, price_list, tax_template: row.doc.tax_template || "" },
 		callback(r) {
 			row.doc.rate = (r.message || {}).rate;
 			row.refresh_field("rate");
@@ -177,7 +177,11 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 				}
 				frappe.call({
 					method: "barcodes_print.api.item.get_item_barcode_details",
-					args: { item_code, price_list: row.doc.price_list || "" },
+					args: {
+						item_code,
+						price_list: row.doc.price_list || "",
+						tax_template: row.doc.tax_template || "",
+					},
 					callback(r) {
 						const data = r.message || {};
 						row.doc.item_name = data.item_name || "";
@@ -290,12 +294,41 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 			},
 		},
 		{
+			fieldname: "company",
+			fieldtype: "Link",
+			options: "Company",
+			in_list_view: 1,
+			label: __("Company"),
+			default: frappe.defaults.get_default("company") || "",
+			description: __("Used to find this Item's Tax Template. Never printed on the label."),
+			onchange: function () {
+				barcodes_print.print_barcode_page._refresh_row_rate(this.grid_row);
+			},
+		},
+		{
+			fieldname: "tax_template",
+			fieldtype: "Link",
+			options: "Item Tax Template",
+			in_list_view: 1,
+			label: __("Tax Template"),
+			description: __('If set, Rate prints "Incl. of taxes"; left blank, "Excl. of taxes". The tax % itself is never printed.'),
+			get_query: function (doc) {
+				// A convenience filter, not a requirement - Company can be
+				// blank and still let any Item Tax Template be picked
+				// directly, per "end of the day user just needs a tax value".
+				return doc.company ? { filters: { company: doc.company } } : {};
+			},
+			onchange: function () {
+				barcodes_print.print_barcode_page._refresh_row_rate(this.grid_row);
+			},
+		},
+		{
 			fieldname: "rate",
 			fieldtype: "Currency",
 			in_list_view: 1,
 			label: __("Rate / Price"),
 			read_only: 1,
-			description: __("Auto-fetched from Price List. Prints as N/A if no price is found."),
+			description: __("Auto-fetched from Price List, marked up by Tax Template's tax % if one is set. Left off the label entirely if no price is found."),
 		},
 		// Hidden bookkeeping only, never rendered as a grid column:
 		// which Purchase Order/Purchase Receipt line (if any) this row
@@ -545,6 +578,12 @@ barcodes_print.print_barcode_page.apply_route_options = function () {
 			row.doc.source_row_name = item_row.source_row_name;
 			row.doc.max_allowed = item_row.max_allowed;
 			row.doc.price_list = state.default_price_list || "";
+			// Auto-fetched straight from the source document/line (see
+			// get_purchase_document_items) - never a user/site default -
+			// so the price printed always matches what's actually on that
+			// Purchase Order/Receipt line.
+			row.doc.company = item_row.company || "";
+			row.doc.tax_template = item_row.tax_template || "";
 			// Only ever populated for a Purchase Receipt line (see
 			// get_purchase_document_items) - already resolved server-side
 			// from either the line's own batch_no/serial_no fields or its
@@ -553,7 +592,7 @@ barcodes_print.print_barcode_page.apply_route_options = function () {
 			// own columns are built from - these fields don't exist on the
 			// row at all when a type is off.
 			const mode = state.batch_serial_print_mode || "Both";
-			const refresh_fields = ["item", "no_of_barcodes", "price_list"];
+			const refresh_fields = ["item", "no_of_barcodes", "price_list", "company", "tax_template"];
 			if (mode !== "Serial Only" && mode !== "Neither") {
 				row.doc.batch_no = item_row.batch_no || "";
 				refresh_fields.push("batch_no");
@@ -566,7 +605,11 @@ barcodes_print.print_barcode_page.apply_route_options = function () {
 
 			frappe.call({
 				method: "barcodes_print.api.item.get_item_barcode_details",
-				args: { item_code: item_row.item, price_list: row.doc.price_list },
+				args: {
+					item_code: item_row.item,
+					price_list: row.doc.price_list,
+					tax_template: row.doc.tax_template || "",
+				},
 				callback(r) {
 					const item_data = r.message || {};
 					row.doc.item_name = item_data.item_name || "";

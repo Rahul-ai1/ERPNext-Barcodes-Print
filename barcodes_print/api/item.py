@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import frappe
+from frappe import _
 from frappe.utils import cint
 
 
@@ -17,8 +18,46 @@ def get_item_price(item_code: str, price_list: str):
 	return rate
 
 
+def get_item_tax_rate_percent(tax_template: str) -> float:
+	"""Total tax % for an Item Tax Template - the sum of its own detail
+	rows' tax_rate, exactly as the template defines it. No transaction
+	(customer/order) is involved, so this is a static, context-free lookup;
+	Nil-Rated/Exempted/Non-GST templates naturally sum to 0."""
+	if not tax_template:
+		return 0.0
+	rows = frappe.get_all(
+		"Item Tax Template Detail",
+		filters={"parent": tax_template, "not_applicable": 0},
+		fields=["tax_rate"],
+	)
+	return sum(frappe.utils.flt(r.tax_rate) for r in rows)
+
+
+def get_item_rate_and_note(item_code: str, price_list: str, tax_template: str = ""):
+	"""The Rate to print and the short note that must go with it. A Tax
+	Template resolved (selected on the Print Barcode page, or auto-fetched
+	from a Purchase Order/Receipt line) means the price is marked up by
+	that template's own tax % and printed "Incl. of taxes"; none resolved
+	means the plain Price List rate, printed "Excl. of taxes" - the label
+	always says which, never just a bare number. Neither the tax % nor any
+	Company/template name is ever printed, only the final Rate and this
+	short note."""
+	base_rate = get_item_price(item_code, price_list) if price_list else None
+	if base_rate is None:
+		return None, ""
+
+	if tax_template:
+		tax_percent = get_item_tax_rate_percent(tax_template)
+		rate = base_rate * (1 + tax_percent / 100.0)
+		return rate, _("Incl. of taxes")
+
+	return base_rate, _("Excl. of taxes")
+
+
 @frappe.whitelist()
-def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str = "") -> dict:
+def get_item_barcode_details(
+	item_code: str, barcode: str = "", price_list: str = "", tax_template: str = ""
+) -> dict:
 	if not item_code:
 		return {}
 
@@ -32,6 +71,7 @@ def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str 
 	serial_printing_enabled = mode in ("Both", "Serial Only")
 
 	item = frappe.get_cached_doc("Item", item_code)
+	rate, price_note = get_item_rate_and_note(item_code, price_list, tax_template)
 	details = {
 		"item_name": item.item_name or "",
 		"uom": item.stock_uom or "",
@@ -46,8 +86,10 @@ def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str 
 		# instead of printing a misleading "0.00". Only ever resolved from
 		# the given Price List's own Item Price row - never
 		# Item.standard_rate, which isn't necessarily the rate anyone
-		# actually sells/buys at.
-		"rate": get_item_price(item_code, price_list) if price_list else None,
+		# actually sells/buys at. Marked up by tax_template's own tax %
+		# when one is given - see get_item_rate_and_note.
+		"rate": rate,
+		"price_note": price_note,
 		"item_group": item.item_group or "",
 		"brand": item.brand or "",
 		"description": item.description or "",

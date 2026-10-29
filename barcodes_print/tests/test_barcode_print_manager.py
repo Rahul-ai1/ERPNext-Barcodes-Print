@@ -7,7 +7,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from barcodes_print.api.barcode import get_barcode_print_settings, validate_barcode_compatibility
-from barcodes_print.api.item import get_item_barcode_details
+from barcodes_print.api.item import get_item_barcode_details, get_item_rate_and_note, get_item_tax_rate_percent
 from barcodes_print.api.printer import get_my_default_printer, set_my_default_printer
 from barcodes_print.api.zpl import (
 	_get_purchase_receipt_batch_serial_map,
@@ -689,6 +689,104 @@ class TestBarcodePrintManager(FrappeTestCase):
 		)
 		zpl_with_price = build_label_zpl(row_with_price, settings, "Medium")
 		self.assertIn(frappe.utils.fmt_money(10), zpl_with_price)
+
+	def _create_item_tax_template(self, company, total_rate):
+		"""A minimal Item Tax Template for `company` whose detail rows sum
+		to `total_rate` percent - split across two distinct Tax accounts
+		(CGST/SGST-style) when more than one exists, otherwise one row -
+		ERPNext rejects the same account appearing twice in one template."""
+		accounts = frappe.get_all(
+			"Account",
+			filters={"company": company, "is_group": 0, "account_type": "Tax"},
+			limit=2,
+		)
+		if not accounts:
+			frappe.throw(f"No Tax account found for {company} - cannot build a test Item Tax Template.")
+		if len(accounts) >= 2:
+			taxes = [
+				{"tax_type": accounts[0].name, "tax_rate": total_rate / 2},
+				{"tax_type": accounts[1].name, "tax_rate": total_rate / 2},
+			]
+		else:
+			taxes = [{"tax_type": accounts[0].name, "tax_rate": total_rate}]
+		return frappe.get_doc({
+			"doctype": "Item Tax Template",
+			"title": f"Test Tax {total_rate}% {frappe.generate_hash(length=4)}",
+			"company": company,
+			"taxes": taxes,
+			# india_compliance (if installed) validates this against the
+			# default "Taxable" GST Treatment - harmless on a site without
+			# it, since an unknown field is simply ignored.
+			"gst_rate": total_rate,
+		}).insert(ignore_permissions=True)
+
+	def test_item_tax_rate_percent_sums_detail_rows(self):
+		company = self._get_or_create_company()
+		template = self._create_item_tax_template(company, 18)
+		self.assertEqual(get_item_tax_rate_percent(template.name), 18)
+		self.assertEqual(get_item_tax_rate_percent(""), 0)
+
+	def test_get_item_rate_and_note_inclusive_vs_exclusive(self):
+		company = self._get_or_create_company()
+		template = self._create_item_tax_template(company, 10)
+		item_code = self._create_test_item_with_barcode()
+		price_list = frappe.get_all("Price List", limit=1)[0].name
+		frappe.get_doc({
+			"doctype": "Item Price",
+			"item_code": item_code,
+			"price_list": price_list,
+			"price_list_rate": 200,
+		}).insert(ignore_permissions=True)
+
+		rate, note = get_item_rate_and_note(item_code, price_list, "")
+		self.assertEqual(rate, 200)
+		self.assertEqual(note, "Excl. of taxes")
+
+		rate, note = get_item_rate_and_note(item_code, price_list, template.name)
+		self.assertAlmostEqual(rate, 220)
+		self.assertEqual(note, "Incl. of taxes")
+
+	def test_build_label_zpl_never_prints_tax_percent_or_company(self):
+		"""The label shows the final Rate and a short Incl./Excl. note -
+		never the tax % itself or any Company/template name."""
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Medium"]["show_rate"] = 1
+
+		row = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X",
+			barcode="ABC123", barcode_type="CODE-39", uom="Nos",
+			rate=220, price_note="Incl. of taxes",
+		)
+		zpl = build_label_zpl(row, settings, "Medium")
+		self.assertIn("220.00 (Incl. of taxes)", zpl)
+		self.assertNotIn("10%", zpl)
+		self.assertNotIn("Company", zpl)
+
+	def test_get_purchase_document_items_fetches_company_and_tax_template_per_line(self):
+		"""Company/Tax Template are auto-fetched straight from the Purchase
+		Order's own document/line - never a user or site default."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.enable_purchase_document_printing = 1
+		settings_doc.purchase_document_type = "Purchase Order"
+		settings_doc.save(ignore_permissions=True)
+
+		company = self._get_or_create_company()
+		template = self._create_item_tax_template(company, 12)
+		item_code = self._create_test_item_with_barcode()
+		po = self._create_purchase_order([
+			{"item_code": item_code, "qty": 2, "rate": 10, "item_tax_template": template.name},
+		])
+
+		try:
+			prefill = get_purchase_document_items("Purchase Order", po.name)
+			self.assertEqual(prefill["items"][0]["company"], company)
+			self.assertEqual(prefill["items"][0]["tax_template"], template.name)
+		finally:
+			po.cancel()
+			frappe.delete_doc("Purchase Order", po.name, force=True, ignore_permissions=True)
+			settings_doc.enable_purchase_document_printing = 0
+			settings_doc.purchase_document_type = ""
+			settings_doc.save(ignore_permissions=True)
 
 	def test_alignment_center_and_right_shift_content_without_overflow(self):
 		"""Center/Right must actually move the barcode and text (not just
