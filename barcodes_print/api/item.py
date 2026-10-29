@@ -34,24 +34,33 @@ def get_item_tax_rate_percent(tax_template: str) -> float:
 
 
 def get_item_rate_and_note(item_code: str, price_list: str, tax_template: str = ""):
-	"""The Rate to print and the short note that must go with it. A Tax
-	Template resolved (selected on the Print Barcode page, or auto-fetched
-	from a Purchase Order/Receipt line) means the price is marked up by
-	that template's own tax % and printed "Incl. of taxes"; none resolved
-	means the plain Price List rate, printed "Excl. of taxes" - the label
-	always says which, never just a bare number. Neither the tax % nor any
-	Company/template name is ever printed, only the final Rate and this
-	short note."""
+	"""The Rate to print, the short note that must go with it, and the
+	currency it's actually denominated in. A Tax Template resolved
+	(selected on the Print Barcode page, or auto-fetched from a Purchase
+	Order/Receipt line) means the price is marked up by that template's own
+	tax % and printed "Incl. of taxes"; none resolved means the plain Price
+	List rate, printed "Excl. of taxes" - the label always says which,
+	never just a bare number. Neither the tax % nor any Company/template
+	name is ever printed, only the final Rate and this short note.
+
+	The currency always comes from the Price List that actually produced
+	the rate - never the site's default currency - so a label correctly
+	shows $ for a USD Price List and ₹ for an INR one. Blank when no price
+	was found at all (the Rate line is skipped entirely in that case) or,
+	in the unlikely event a Price List has no currency set, which simply
+	leaves the printed number without a symbol rather than guessing one."""
 	base_rate = get_item_price(item_code, price_list) if price_list else None
 	if base_rate is None:
-		return None, ""
+		return None, "", ""
+
+	currency = frappe.get_cached_value("Price List", price_list, "currency") or ""
 
 	if tax_template:
 		tax_percent = get_item_tax_rate_percent(tax_template)
 		rate = base_rate * (1 + tax_percent / 100.0)
-		return rate, _("Incl. of taxes")
+		return rate, _("Incl. of taxes"), currency
 
-	return base_rate, _("Excl. of taxes")
+	return base_rate, _("Excl. of taxes"), currency
 
 
 @frappe.whitelist()
@@ -71,7 +80,7 @@ def get_item_barcode_details(
 	serial_printing_enabled = mode in ("Both", "Serial Only")
 
 	item = frappe.get_cached_doc("Item", item_code)
-	rate, price_note = get_item_rate_and_note(item_code, price_list, tax_template)
+	rate, price_note, currency = get_item_rate_and_note(item_code, price_list, tax_template)
 	details = {
 		"item_name": item.item_name or "",
 		"uom": item.stock_uom or "",
@@ -90,6 +99,7 @@ def get_item_barcode_details(
 		# when one is given - see get_item_rate_and_note.
 		"rate": rate,
 		"price_note": price_note,
+		"currency": currency,
 		"item_group": item.item_group or "",
 		"brand": item.brand or "",
 		"description": item.description or "",

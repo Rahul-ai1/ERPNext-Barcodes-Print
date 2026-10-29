@@ -29,6 +29,7 @@ from barcodes_print.api.zpl import (
 	_get_batch_serial_map,
 	_split_into_columns,
 	_truncate_to_column_width,
+	_zpl_safe_money,
 	build_label_zpl,
 	get_label_dimensions_dots,
 	get_purchase_document_items,
@@ -918,13 +919,17 @@ class TestBarcodePrintManager(FrappeTestCase):
 				"price_list_rate": 200,
 			}).insert(ignore_permissions=True)
 
-		rate, note = get_item_rate_and_note(item_code, price_list, "")
+		expected_currency = frappe.db.get_value("Price List", price_list, "currency")
+
+		rate, note, currency = get_item_rate_and_note(item_code, price_list, "")
 		self.assertEqual(rate, 200)
 		self.assertEqual(note, "Excl. of taxes")
+		self.assertEqual(currency, expected_currency)
 
-		rate, note = get_item_rate_and_note(item_code, price_list, template.name)
+		rate, note, currency = get_item_rate_and_note(item_code, price_list, template.name)
 		self.assertAlmostEqual(rate, 220)
 		self.assertEqual(note, "Incl. of taxes")
+		self.assertEqual(currency, expected_currency)
 
 	def test_build_label_zpl_never_prints_tax_percent_or_company(self):
 		"""The label shows the final Rate and a short Incl./Excl. note -
@@ -985,6 +990,84 @@ class TestBarcodePrintManager(FrappeTestCase):
 		)
 		zpl = build_label_zpl(row, settings, "Medium")
 		self.assertIn("MRP: " + frappe.utils.fmt_money(150) + " (Excl. of taxes)", zpl)
+
+	# ---- Feature: Price line currency symbol (barcodes_print.api.zpl) ----
+
+	def test_format_price_line_blank_currency_is_unchanged_from_before_this_feature(self):
+		"""No currency (the default, "" or None) must reproduce exactly what
+		this app always printed - a bare number, no symbol."""
+		self.assertEqual(_format_price_line(220, "", "Rate", ""), frappe.utils.fmt_money(220))
+		self.assertEqual(_format_price_line(220, "", "Rate"), frappe.utils.fmt_money(220))
+
+	def test_format_price_line_prefixes_an_ascii_currency_symbol(self):
+		"""USD's "$" is plain ASCII - a real Zebra printer can print it, so
+		it's used as-is via fmt_money's own formatting."""
+		self.assertEqual(
+			_format_price_line(2500, "Excl. of taxes", "Rate", "USD"),
+			f"{frappe.utils.fmt_money(2500, currency='USD')} (Excl. of taxes)",
+		)
+
+	def test_format_price_line_falls_back_to_iso_code_for_a_non_ascii_symbol(self):
+		"""INR's "₹" prints as blank space on a real Zebra printer (confirmed
+		via Labelary during this feature's own verification) - the 3-letter
+		ISO code is printed instead, which every Zebra font can render."""
+		self.assertEqual(
+			_format_price_line(2500, "Excl. of taxes", "Rate", "INR"),
+			f"INR {frappe.utils.fmt_money(2500)} (Excl. of taxes)",
+		)
+
+	def test_format_price_line_currency_combines_with_mrp_prefix(self):
+		self.assertEqual(
+			_format_price_line(2500, "Incl. of taxes", "MRP", "INR"),
+			f"MRP: INR {frappe.utils.fmt_money(2500)} (Incl. of taxes)",
+		)
+
+	def test_zpl_safe_money_falls_back_to_iso_code_for_non_ascii_symbols(self):
+		for code in ("INR", "EUR", "GBP", "JPY"):
+			self.assertEqual(_zpl_safe_money(100, code), f"{code} {frappe.utils.fmt_money(100)}")
+
+	def test_zpl_safe_money_keeps_an_ascii_symbol(self):
+		self.assertEqual(_zpl_safe_money(100, "USD"), frappe.utils.fmt_money(100, currency="USD"))
+
+	def test_zpl_safe_money_blank_currency_is_a_bare_number(self):
+		self.assertEqual(_zpl_safe_money(100, ""), frappe.utils.fmt_money(100))
+
+	def test_get_item_rate_and_note_returns_blank_currency_when_no_price_found(self):
+		rate, note, currency = get_item_rate_and_note("NONEXISTENT-ITEM-XYZ", "", "")
+		self.assertIsNone(rate)
+		self.assertEqual(note, "")
+		self.assertEqual(currency, "")
+
+	def test_build_label_zpl_prints_currency_symbol_from_the_price_list(self):
+		"""End-to-end: resolve_row/get_item_barcode_details carry the Price
+		List's own currency through to the printed line - confirmed against
+		a real USD Price List, not the site's own default currency."""
+		item_code = self._create_test_item_with_barcode()
+		price_list = frappe.get_doc({
+			"doctype": "Price List",
+			"price_list_name": "_Test USD Price List",
+			"selling": 1,
+			"currency": "USD",
+		}).insert(ignore_permissions=True).name
+		frappe.get_doc({
+			"doctype": "Item Price",
+			"item_code": item_code,
+			"price_list": price_list,
+			"price_list_rate": 99,
+		}).insert(ignore_permissions=True)
+
+		try:
+			details = get_item_barcode_details(item_code, price_list=price_list)
+			self.assertEqual(details["currency"], "USD")
+
+			settings = get_barcode_print_settings()
+			settings["display_rules"]["Medium"]["show_rate"] = 1
+			row = resolve_row(item_code, price_list=price_list, size="Medium")
+			zpl = build_label_zpl(row, settings, "Medium")
+			self.assertIn(frappe.utils.fmt_money(99, currency="USD"), zpl)
+		finally:
+			frappe.db.delete("Item Price", {"price_list": price_list})
+			frappe.delete_doc("Price List", price_list, force=True, ignore_permissions=True)
 
 	def test_get_barcode_print_settings_defaults_price_label_to_rate(self):
 		self.assertEqual(get_barcode_print_settings()["price_label"], "Rate")

@@ -153,15 +153,40 @@ def _text_line_zpl(margin: int, y: int, available_width: int, fb_justify: str, t
 	return f"^FO{margin},{y}^FB{available_width},1,0,{fb_justify}^A0N,{text_h},{text_h}^FD{_zpl_escape(text)}^FS"
 
 
-def _format_price_line(rate, price_note: str, price_label: str) -> str:
+def _zpl_safe_money(rate, currency: str) -> str:
+	"""frappe.utils.fmt_money's own currency symbol can fall outside a Zebra
+	printer's built-in font character set - confirmed via Labelary (which
+	accurately emulates real Zebra firmware): USD's "$" prints fine, but
+	INR's "₹", EUR's "€", GBP's "£", and JPY's "¥" all print as blank space
+	instead of the symbol. This is a printer-hardware limitation, not a
+	formatting choice, so when the resolved symbol isn't plain ASCII, the
+	currency's own 3-letter ISO code is printed instead (e.g.
+	"INR 2,500.00") - always printable on any Zebra printer, and still
+	unambiguous about which currency this is. Blank currency (today's
+	default) is untouched - a bare number, exactly as always."""
+	if not currency:
+		return frappe.utils.fmt_money(rate)
+	symbol = frappe.get_cached_value("Currency", currency, "symbol") or ""
+	if symbol and not symbol.isascii():
+		return f"{currency} {frappe.utils.fmt_money(rate)}"
+	return frappe.utils.fmt_money(rate, currency=currency)
+
+
+def _format_price_line(rate, price_note: str, price_label: str, currency: str = "") -> str:
 	"""The Rate/MRP text line - shared by the real barcode path
 	(build_label_zpl) and the text-only Label Only path
 	(_build_label_only_zpl) so the two can't drift apart. "Rate" (the
 	default) prints exactly as this app always has - no prefix word, just
 	the number and its Incl./Excl. of taxes note; "MRP" prefixes the same
 	line with "MRP: ", regardless of whether a Tax Template happens to be
-	set on that row."""
-	price_line = frappe.utils.fmt_money(rate)
+	set on that row.
+
+	`currency` prefixes the number with that currency's own printable
+	symbol or ISO code (see _zpl_safe_money). Blank (the default) falls
+	back to a bare number, exactly what this app always printed before
+	this currency feature existed - never a special case, just passing
+	nothing."""
+	price_line = _zpl_safe_money(rate, currency)
 	if price_note:
 		price_line = f"{price_line} ({price_note})"
 	if price_label == "MRP":
@@ -297,7 +322,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		# misleading "0.00". price_note ("Incl./Excl. of taxes") always
 		# rides on the same line - never a bare number, and never the tax
 		# % or Company name themselves, only this short note.
-		price_line = _format_price_line(row.rate, row.get("price_note") or "", settings.get("price_label") or "Rate")
+		price_line = _format_price_line(row.rate, row.get("price_note") or "", settings.get("price_label") or "Rate", row.get("currency") or "")
 		text_lines_after.append(price_line)
 
 	n_lines = len(text_lines_before) + len(text_lines_after)
@@ -396,7 +421,7 @@ def _build_label_only_zpl(row, settings: dict, size: str) -> str:
 	if rules["show_uom"] and row.uom:
 		text_lines.append(f"UOM: {row.uom}")
 	if rules["show_rate"] and row.rate is not None:
-		price_line = _format_price_line(row.rate, row.get("price_note") or "", settings.get("price_label") or "Rate")
+		price_line = _format_price_line(row.rate, row.get("price_note") or "", settings.get("price_label") or "Rate", row.get("currency") or "")
 		text_lines.append(price_line)
 
 	text_height_mm = {"Small": 2.5, "Medium": 3.3, "Large": 4.2}[base_size_of(size)]
@@ -511,6 +536,7 @@ def resolve_row(
 		# up by tax_template's own tax % if one was given.
 		rate=details.get("rate"),
 		price_note=details.get("price_note") or "",
+		currency=details.get("currency") or "",
 		price_list=price_list or "",
 		barcode=barcode or details.get("barcode") or "",
 		barcode_type=barcode_type or details.get("barcode_type") or "",
