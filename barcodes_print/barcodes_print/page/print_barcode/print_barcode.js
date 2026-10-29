@@ -136,8 +136,23 @@ barcodes_print.print_barcode_page._refresh_row_rate = function (row) {
 	});
 };
 
-barcodes_print.print_barcode_page.get_item_fields = function (default_price_list) {
-	return [
+barcodes_print.print_barcode_page.get_item_fields = function (default_price_list, batch_serial_mode) {
+	// Batch/Serial Printing (site-wide, in Settings) - when a type is off
+	// there, its column/picker doesn't appear here at all, rather than
+	// appearing but never doing anything.
+	const batch_enabled = batch_serial_mode !== "Serial Only" && batch_serial_mode !== "Neither";
+	const serial_enabled = batch_serial_mode !== "Batch Only" && batch_serial_mode !== "Neither";
+
+	// Only ever touch fields that actually exist as grid columns - a
+	// disabled type's field isn't just hidden, it's left out of the field
+	// list entirely, so refresh_field("batch_no")/("serial_nos") would
+	// throw if called unconditionally below.
+	const batch_serial_fieldnames = [
+		...(batch_enabled ? ["batch_no"] : []),
+		...(serial_enabled ? ["serial_nos"] : []),
+	];
+
+	const fields = [
 		{
 			fieldname: "item",
 			fieldtype: "Link",
@@ -149,7 +164,7 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 				const row = this.grid_row;
 				const item_code = this.value;
 				if (!item_code) {
-					["item_name", "uom", "barcode", "barcode_type", "batch_no", "serial_nos"].forEach((f) => {
+					["item_name", "uom", "barcode", "barcode_type", ...batch_serial_fieldnames].forEach((f) => {
 						row.doc[f] = "";
 						row.refresh_field(f);
 					});
@@ -172,12 +187,12 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 						row.doc.rate = data.rate;
 						// A different Item invalidates any Batch No/Serial
 						// Nos picked for the previous one.
-						row.doc.batch_no = "";
-						row.doc.serial_nos = "";
+						if (batch_enabled) row.doc.batch_no = "";
+						if (serial_enabled) row.doc.serial_nos = "";
 						row.doc._has_batch_no = data.has_batch_no;
 						row.doc._has_serial_no = data.has_serial_no;
-						["item_name", "uom", "barcode", "barcode_type", "rate", "batch_no", "serial_nos"].forEach((f) =>
-							row.refresh_field(f)
+						["item_name", "uom", "barcode", "barcode_type", "rate", ...batch_serial_fieldnames].forEach(
+							(f) => row.refresh_field(f)
 						);
 
 						// More than one barcode on this Item: the server
@@ -198,7 +213,10 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 						// labelled right away, same as the barcode-choice
 						// prompt above - Batch No is picked separately below
 						// (a Link field of its own) if the item only tracks
-						// batches, not individual serials.
+						// batches, not individual serials. Already gated
+						// server-side by Batch/Serial Printing - data.has_serial_no
+						// is 0 whenever that's off, regardless of the Item's
+						// own tracking.
 						if (data.has_serial_no) {
 							barcodes_print.print_barcode_page.prompt_serial_no_choice(row, item_code, "");
 						}
@@ -210,7 +228,10 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 		{ fieldname: "uom", fieldtype: "Link", options: "UOM", in_list_view: 1, label: __("UOM"), read_only: 1 },
 		{ fieldname: "barcode", fieldtype: "Data", in_list_view: 1, label: __("Barcode"), read_only: 1 },
 		{ fieldname: "barcode_type", fieldtype: "Data", in_list_view: 1, label: __("Barcode Type"), read_only: 1 },
-		{
+	];
+
+	if (batch_enabled) {
+		fields.push({
 			fieldname: "batch_no",
 			fieldtype: "Link",
 			options: "Batch",
@@ -225,14 +246,19 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 					barcodes_print.print_barcode_page.prompt_serial_no_choice(row, row.doc.item, this.value || "");
 				}
 			},
-		},
-		{
+		});
+	}
+	if (serial_enabled) {
+		fields.push({
 			fieldname: "serial_nos",
 			fieldtype: "Small Text",
 			in_list_view: 1,
 			label: __("Serial Nos"),
 			read_only: 1,
-		},
+		});
+	}
+
+	fields.push(
 		{
 			fieldname: "no_of_barcodes",
 			fieldtype: "Int",
@@ -276,8 +302,10 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 		// came from, so a successful print can bump that line's own
 		// printed-barcode counter.
 		{ fieldname: "source_row_name", fieldtype: "Data", hidden: 1 },
-		{ fieldname: "max_allowed", fieldtype: "Int", hidden: 1 },
-	];
+		{ fieldname: "max_allowed", fieldtype: "Int", hidden: 1 }
+	);
+
+	return fields;
 };
 
 barcodes_print.print_barcode_page.render = function (page) {
@@ -310,6 +338,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 		const default_price_list = defaults.default_price_list || "";
 		const print_connector = defaults.print_connector || "";
 		const my_default_printer = defaults.my_default_printer || "";
+		const batch_serial_print_mode = defaults.batch_serial_print_mode || "Both";
 
 		const items_control = frappe.ui.form.make_control({
 			parent: $items_area,
@@ -320,7 +349,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 				options: "Print Label Item",
 				in_place_edit: false,
 				cannot_add_rows: false,
-				fields: barcodes_print.print_barcode_page.get_item_fields(default_price_list),
+				fields: barcodes_print.print_barcode_page.get_item_fields(default_price_list, batch_serial_print_mode),
 			},
 			render_input: true,
 		});
@@ -362,6 +391,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 			default_price_list,
 			print_connector,
 			my_default_printer,
+			batch_serial_print_mode,
 			$source_banner,
 			$total_area,
 			$printer_area,
@@ -519,9 +549,20 @@ barcodes_print.print_barcode_page.apply_route_options = function () {
 			// get_purchase_document_items) - already resolved server-side
 			// from either the line's own batch_no/serial_no fields or its
 			// Serial and Batch Bundle, so no picker dialog is needed here.
-			row.doc.batch_no = item_row.batch_no || "";
-			row.doc.serial_nos = item_row.serial_no || "";
-			["item", "no_of_barcodes", "price_list", "batch_no", "serial_nos"].forEach((f) => row.refresh_field(f));
+			// Guarded by the same Batch/Serial Printing setting the grid's
+			// own columns are built from - these fields don't exist on the
+			// row at all when a type is off.
+			const mode = state.batch_serial_print_mode || "Both";
+			const refresh_fields = ["item", "no_of_barcodes", "price_list"];
+			if (mode !== "Serial Only" && mode !== "Neither") {
+				row.doc.batch_no = item_row.batch_no || "";
+				refresh_fields.push("batch_no");
+			}
+			if (mode !== "Batch Only" && mode !== "Neither") {
+				row.doc.serial_nos = item_row.serial_no || "";
+				refresh_fields.push("serial_nos");
+			}
+			refresh_fields.forEach((f) => row.refresh_field(f));
 
 			frappe.call({
 				method: "barcodes_print.api.item.get_item_barcode_details",

@@ -57,7 +57,10 @@ class TestBarcodePrintManager(FrappeTestCase):
 				"show_barcode_number": 1,
 				"show_barcode_type": 1,
 				"show_rate": 0,
+				"show_batch_no": 1,
+				"show_serial_no": 1,
 			})
+		settings.batch_serial_print_mode = "Both"
 		settings.print_connector = "QZ Tray"
 		settings.printer_dpi = "203"
 		settings.small_width_mm = 50
@@ -1146,10 +1149,12 @@ class TestBarcodePrintManager(FrappeTestCase):
 		self.assertIn(f"Serial: {serials[0]}", zpl2)
 		self.assertIn(f"Batch: {batch_no}", zpl2)
 
-	def test_batch_serial_print_mode_controls_what_prints_globally(self):
-		"""The global Print Batch/Serial No setting (Both/Batch Only/Serial
-		Only/Neither) applies to every label size at once - replaces the
-		earlier per-size Show Batch No/Show Serial No checkboxes."""
+	def test_batch_serial_print_mode_gates_encoding_globally(self):
+		"""Batch/Serial Printing (global, site-wide) controls whether
+		printing BY Batch/Serial is available at all - not just whether its
+		text line is shown. With Serial off, resolve_row must ignore a
+		serial_no it's given and fall back to the Item's own barcode,
+		exactly as if neither had been passed."""
 		settings_doc = frappe.get_single("Barcode Print Settings")
 		item_code, batch_no = self._create_batch_tracked_item()
 		serial_item_code, serials = self._create_serial_tracked_item(batch_no=batch_no)
@@ -1157,25 +1162,46 @@ class TestBarcodePrintManager(FrappeTestCase):
 		try:
 			settings_doc.batch_serial_print_mode = "Batch Only"
 			settings_doc.save(ignore_permissions=True)
-			settings = get_barcode_print_settings()
-			self.assertEqual(settings["batch_serial_print_mode"], "Batch Only")
 
+			# Batch is still allowed - encodes normally.
 			row = resolve_row(item_code, no_of_barcodes=1, batch_no=batch_no)
-			zpl = build_label_zpl(row, settings, "Medium")
-			self.assertIn(f"Batch: {batch_no}", zpl)
+			self.assertEqual(row.barcode, batch_no)
 
-			row2 = resolve_row(serial_item_code, no_of_barcodes=1, serial_no=serials[0])
-			zpl2 = build_label_zpl(row2, settings, "Medium")
-			self.assertNotIn(f"Serial: {serials[0]}", zpl2)
+			# Serial is off globally - a serial_no passed anyway is ignored,
+			# not honoured, so this falls through to "no barcode available"
+			# for an item with none registered (same as passing nothing).
+			with self.assertRaises(frappe.ValidationError):
+				resolve_row(serial_item_code, no_of_barcodes=1, serial_no=serials[0])
 
 			settings_doc.batch_serial_print_mode = "Neither"
 			settings_doc.save(ignore_permissions=True)
-			settings = get_barcode_print_settings()
-			zpl3 = build_label_zpl(row, settings, "Medium")
-			self.assertNotIn("Batch:", zpl3)
+			with self.assertRaises(frappe.ValidationError):
+				resolve_row(item_code, no_of_barcodes=1, batch_no=batch_no)
 		finally:
 			settings_doc.batch_serial_print_mode = "Both"
 			settings_doc.save(ignore_permissions=True)
+
+	def test_show_batch_serial_no_is_per_size_display_only(self):
+		"""Each label size's own Show Batch No/Show Serial No checkbox
+		(Display Rules) controls only whether the resolved text line shows
+		on that size's label - independent of the global Batch/Serial
+		Printing setting, which stays "Both" (encoding always allowed)."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		item_code, batch_no = self._create_batch_tracked_item()
+
+		try:
+			self._set_display_rule(settings_doc, "Medium", show_batch_no=0)
+			self._set_display_rule(settings_doc, "Large", show_batch_no=1)
+			settings = get_barcode_print_settings()
+
+			row = resolve_row(item_code, no_of_barcodes=1, batch_no=batch_no)
+			zpl_medium = build_label_zpl(row, settings, "Medium")
+			self.assertNotIn("Batch:", zpl_medium)
+
+			zpl_large = build_label_zpl(row, settings, "Large")
+			self.assertIn(f"Batch: {batch_no}", zpl_large)
+		finally:
+			self.setUp()
 
 	def test_get_quick_print_job_expands_one_row_per_serial_no(self):
 		"""Selecting multiple Serial Nos for one grid row must produce one

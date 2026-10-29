@@ -89,6 +89,8 @@ _DEFAULT_DISPLAY_RULE = {
 	"show_barcode_type": 1,
 	"show_uom": 1,
 	"show_rate": 0,
+	"show_batch_no": 1,
+	"show_serial_no": 1,
 }
 
 
@@ -105,6 +107,9 @@ def get_print_barcode_page_defaults() -> dict:
 		"my_default_printer": frappe.db.get_value(
 			"User", frappe.session.user, "custom_default_label_printer"
 		) or "",
+		"batch_serial_print_mode": frappe.db.get_single_value(
+			"Barcode Print Settings", "batch_serial_print_mode"
+		) or "Both",
 	}
 
 
@@ -123,6 +128,8 @@ def get_barcode_print_settings() -> dict:
 			"show_barcode_type": cint(row.show_barcode_type),
 			"show_uom": cint(row.show_uom),
 			"show_rate": cint(row.show_rate),
+			"show_batch_no": cint(row.show_batch_no),
+			"show_serial_no": cint(row.show_serial_no),
 		}
 
 	return {

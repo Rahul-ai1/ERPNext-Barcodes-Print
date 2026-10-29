@@ -178,10 +178,13 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		text_lines_after.append(row.barcode)
 	if rules["show_barcode_type"]:
 		text_lines_after.append(row.barcode_type)
-	batch_serial_mode = settings.get("batch_serial_print_mode") or "Both"
-	if batch_serial_mode in ("Both", "Batch Only") and row.batch_no:
+	# Whether printing by Batch/Serial is enabled at all (site-wide) is
+	# already enforced upstream in resolve_row - row.batch_no/serial_no are
+	# never populated for a disabled type to begin with. This is purely
+	# the per-size "show the text line" choice.
+	if rules["show_batch_no"] and row.batch_no:
 		text_lines_after.append(_("Batch: {0}").format(row.batch_no))
-	if batch_serial_mode in ("Both", "Serial Only") and row.serial_no:
+	if rules["show_serial_no"] and row.serial_no:
 		text_lines_after.append(_("Serial: {0}").format(row.serial_no))
 	if rules["show_uom"] and row.uom:
 		text_lines_after.append(f"UOM: {row.uom}")
@@ -283,6 +286,17 @@ def resolve_row(
 	no_of_barcodes = frappe.utils.cint(no_of_barcodes) or 1
 	if no_of_barcodes < 1:
 		frappe.throw(_("No. of Barcodes must be at least 1."))
+
+	# Defense in depth - the Print Barcode page's own picker already never
+	# offers a type that's off in Batch/Serial Printing, but this call is a
+	# whitelisted method, so a request that supplies one directly anyway is
+	# silently ignored rather than trusted, falling back to the Item's own
+	# barcode exactly as if neither had been given.
+	mode = get_barcode_print_settings()["batch_serial_print_mode"]
+	if serial_no and mode not in ("Both", "Serial Only"):
+		serial_no = ""
+	if batch_no and mode not in ("Both", "Batch Only"):
+		batch_no = ""
 
 	if serial_no:
 		serial_doc = frappe.db.get_value("Serial No", serial_no, ["item_code", "batch_no"], as_dict=True)

@@ -25,12 +25,22 @@ def get_item_barcode_details(item_code: str, barcode: str = "", price_list: str 
 	if not frappe.db.exists("Item", item_code):
 		return {}
 
+	from barcodes_print.api.barcode import get_barcode_print_settings
+
+	mode = get_barcode_print_settings()["batch_serial_print_mode"]
+	batch_printing_enabled = mode in ("Both", "Batch Only")
+	serial_printing_enabled = mode in ("Both", "Serial Only")
+
 	item = frappe.get_cached_doc("Item", item_code)
 	details = {
 		"item_name": item.item_name or "",
 		"uom": item.stock_uom or "",
-		"has_batch_no": cint(item.has_batch_no),
-		"has_serial_no": cint(item.has_serial_no),
+		# Gated by the site-wide Batch/Serial Printing setting - when a
+		# type is off there, the Print Barcode page's picker for it never
+		# even appears, regardless of whether this Item is actually
+		# tracked that way.
+		"has_batch_no": cint(item.has_batch_no) if batch_printing_enabled else 0,
+		"has_serial_no": cint(item.has_serial_no) if serial_printing_enabled else 0,
 		# None (not 0.0) means "no price found" - kept distinct from a
 		# genuine zero price so the label leaves the Rate line off entirely
 		# instead of printing a misleading "0.00". Only ever resolved from

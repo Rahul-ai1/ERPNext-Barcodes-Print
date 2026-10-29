@@ -55,6 +55,8 @@ DISPLAY_RULE_DEFAULTS = {
 	"show_barcode_type": 1,
 	"show_uom": 1,
 	"show_rate": 0,
+	"show_batch_no": 1,
+	"show_serial_no": 1,
 }
 
 
@@ -127,6 +129,17 @@ def ensure_display_rules():
 		row.update(DISPLAY_RULE_DEFAULTS)
 		doc.append("display_rules", row)
 		updated = True
+
+	# Batch No/Serial No per-size toggles were added, removed, then
+	# re-added as their own fields - a NULL column needs explicit
+	# backfilling on an existing row, not just "left unset".
+	for row in doc.display_rules or []:
+		if row.get("show_batch_no") is None:
+			row.show_batch_no = DISPLAY_RULE_DEFAULTS["show_batch_no"]
+			updated = True
+		if row.get("show_serial_no") is None:
+			row.show_serial_no = DISPLAY_RULE_DEFAULTS["show_serial_no"]
+			updated = True
 
 	if updated:
 		doc.save(ignore_permissions=True)

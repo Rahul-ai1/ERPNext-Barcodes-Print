@@ -132,10 +132,10 @@
   },
   {
    "default": "Both",
-   "description": "Display only - whether the Batch/Serial text line shows on the label. Does not affect selecting or encoding a Batch/Serial No.",
+   "description": "Whether printing by Batch No/Serial No is available at all, site-wide. When a type is off, its picker doesn't appear on the Print Barcode page and printing always uses the item's own barcode instead. This does not control whether the Batch/Serial text line is shown once printed - see each size's own Batch No/Serial No checkbox below for that.",
    "fieldname": "batch_serial_print_mode",
    "fieldtype": "Select",
-   "label": "Show Batch/Serial No on Label",
+   "label": "Batch/Serial Printing",
    "options": "Both\nBatch Only\nSerial Only\nNeither",
    "reqd": 1
   },
@@ -211,7 +211,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-29 05:54:23.229812",
+ "modified": "2026-10-29 06:10:51.686672",
  "modified_by": "Administrator",
  "module": "Barcodes Print",
  "name": "Barcode Print Settings",
