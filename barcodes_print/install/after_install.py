@@ -59,6 +59,17 @@ DISPLAY_RULE_DEFAULTS = {
 	"show_serial_no": 1,
 }
 
+# A "<Size> Label Only" row has no barcode at all, so barcode-number/type
+# and batch/serial (only ever resolved for encoding into a barcode) are
+# never applicable, regardless of the base size's own toggles.
+LABEL_ONLY_DISPLAY_RULE_DEFAULTS = {
+	**DISPLAY_RULE_DEFAULTS,
+	"show_barcode_number": 0,
+	"show_barcode_type": 0,
+	"show_batch_no": 0,
+	"show_serial_no": 0,
+}
+
 
 def after_install():
 	sync_standard_files()
@@ -113,20 +124,22 @@ def seed_barcode_print_settings():
 
 def ensure_display_rules():
 	"""Every label size needs its own Display Rule row (what to show +
-	alignment) - seed the three fixed sizes if any are missing, so this
-	mandatory Table field is never left empty on a fresh install or for an
-	existing site upgrading from the old global-toggle-only version."""
+	alignment) - seed the three fixed sizes, plus their three "Label Only"
+	(no barcode at all) variants, if any are missing, so this mandatory
+	Table field is never left empty on a fresh install or for an existing
+	site upgrading from an older version of this app."""
 	if not frappe.db.exists("DocType", "Barcode Print Settings"):
 		return
 
 	doc = frappe.get_single("Barcode Print Settings")
 	existing_sizes = {row.label_size for row in (doc.display_rules or [])}
 	updated = False
-	for size in ("Small", "Medium", "Large"):
+	sizes = ("Small", "Medium", "Large")
+	for size in sizes + tuple(f"{s} Label Only" for s in sizes):
 		if size in existing_sizes:
 			continue
 		row = {"label_size": size}
-		row.update(DISPLAY_RULE_DEFAULTS)
+		row.update(LABEL_ONLY_DISPLAY_RULE_DEFAULTS if size.endswith(" Label Only") else DISPLAY_RULE_DEFAULTS)
 		doc.append("display_rules", row)
 		updated = True
 

@@ -6,7 +6,12 @@ import re
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from barcodes_print.api.barcode import get_barcode_print_settings, validate_barcode_compatibility
+from barcodes_print.api.barcode import (
+	base_size_of,
+	get_barcode_print_settings,
+	is_label_only_size,
+	validate_barcode_compatibility,
+)
 from barcodes_print.api.import_items import import_items_from_file
 from barcodes_print.api.item import (
 	batch_belongs_to_item,
@@ -300,6 +305,91 @@ class TestBarcodePrintManager(FrappeTestCase):
 
 		row = resolve_row(item_code, barcode="12345678", no_of_barcodes=1)
 		self.assertTrue((row.barcode_type or "").strip())
+
+	# ---- Feature: "Label Only" sizes (barcodes_print.api.barcode/zpl) ----
+
+	def _create_item_without_barcode(self):
+		item_code = f"TEST-ITEM-NO-BARCODE-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "No Barcode Test Item",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": "Nos",
+		}).insert(ignore_permissions=True)
+		return item_code
+
+	def test_is_label_only_size_and_base_size_of(self):
+		self.assertTrue(is_label_only_size("Small Label Only"))
+		self.assertTrue(is_label_only_size("Medium Label Only"))
+		self.assertFalse(is_label_only_size("Small"))
+		self.assertFalse(is_label_only_size(""))
+		self.assertEqual(base_size_of("Small Label Only"), "Small")
+		self.assertEqual(base_size_of("Large Label Only"), "Large")
+		self.assertEqual(base_size_of("Medium"), "Medium")
+
+	def test_get_label_dimensions_dots_label_only_reuses_base_size(self):
+		"""A Label Only choice must print on the exact same physical label
+		as its base size - no separate dimension fields exist for it."""
+		settings = get_barcode_print_settings()
+		self.assertEqual(
+			get_label_dimensions_dots(settings, "Small Label Only"),
+			get_label_dimensions_dots(settings, "Small"),
+		)
+
+	def test_resolve_row_label_only_skips_barcode_requirement(self):
+		"""The one behavior change this feature makes: an Item with no
+		barcode, which would otherwise hard-error, resolves cleanly when a
+		Label Only size is explicitly chosen."""
+		item_code = self._create_item_without_barcode()
+		row = resolve_row(item_code, no_of_barcodes=2, size="Small Label Only")
+		self.assertEqual(row.barcode, "")
+		self.assertEqual(row.no_of_barcodes, 2)
+
+	def test_resolve_row_existing_sizes_still_require_barcode(self):
+		"""The hard constraint this feature must never weaken: a real
+		Small/Medium/Large size (or no size at all) still throws on a
+		missing barcode, exactly as before this feature existed."""
+		item_code = self._create_item_without_barcode()
+		with self.assertRaises(frappe.ValidationError):
+			resolve_row(item_code, no_of_barcodes=1, size="Small")
+		with self.assertRaises(frappe.ValidationError):
+			resolve_row(item_code, no_of_barcodes=1)  # no size passed at all
+
+	def test_resolve_row_label_only_strips_batch_and_serial(self):
+		"""Batch/Serial selection isn't offered for a Label Only size -
+		enforced server-side (defense in depth) by stripping it before the
+		batch-ownership check even runs, not just hidden client-side."""
+		item_code, _ = self._create_batch_tracked_item()
+		row = resolve_row(item_code, no_of_barcodes=1, batch_no="NO-SUCH-BATCH", size="Medium Label Only")
+		self.assertEqual(row.batch_no, "")
+		self.assertEqual(row.barcode, "")
+
+	def test_build_label_zpl_label_only_prints_text_without_a_barcode(self):
+		settings = get_barcode_print_settings()
+		settings["display_rules"]["Medium Label Only"]["show_rate"] = 1
+		row = frappe._dict(
+			idx=1, item="ITEM-X", item_name="Item X", barcode="", barcode_type="",
+			uom="Nos", rate=42, price_note="Excl. of taxes",
+		)
+		zpl = build_label_zpl(row, settings, "Medium Label Only")
+		self.assertIn("^XA", zpl)
+		self.assertIn("^XZ", zpl)
+		self.assertIn("Item X", zpl)
+		self.assertIn(frappe.utils.fmt_money(42), zpl)
+		# No barcode field command of any kind - ^B. is the common prefix
+		# for every symbology this app emits (^BC/^BE/^B3/^BQ/^BX/etc.).
+		self.assertNotRegex(zpl, r"\^B[A-Z0-9]")
+
+	def test_get_quick_print_job_label_only_size_end_to_end(self):
+		"""Full integration: an Item with no barcode, which would normally
+		block printing entirely, succeeds end-to-end at a Label Only size."""
+		item_code = self._create_item_without_barcode()
+		job = get_quick_print_job([{"item": item_code, "no_of_barcodes": 3}], "Small Label Only")
+		self.assertEqual(job["total_labels"], 3)
+		self.assertEqual(job["zpl"].count("^XA"), 3)
+		self.assertNotRegex(job["zpl"], r"\^B[A-Z0-9]")
 
 	def test_item_master_barcode_types_ean_itf_code128(self):
 		"""Important Requirement: Use the exact barcode type from Item Master (EAN-13, ITF, CODE-128)."""

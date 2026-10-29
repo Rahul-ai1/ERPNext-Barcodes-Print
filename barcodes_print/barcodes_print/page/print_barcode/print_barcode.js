@@ -405,7 +405,7 @@ barcodes_print.print_barcode_page.render = function (page) {
 				fieldname: "size",
 				fieldtype: "Select",
 				label: __("Label Size"),
-				options: "Small\nMedium\nLarge",
+				options: "Small\nMedium\nLarge\nSmall Label Only\nMedium Label Only\nLarge Label Only",
 				default: "Medium",
 				reqd: 1,
 			},

@@ -81,6 +81,30 @@ FIXED_LENGTH_DIGITS = {
 }
 
 
+LABEL_SIZES = ("Small", "Medium", "Large")
+# A "<Size> Label Only" choice is a deliberate, additive extra option - a
+# text-only label with no barcode at all, for an Item that genuinely has
+# none. It reuses its base size's own physical dimensions (see
+# api.zpl.base_size_of/get_label_dimensions_dots) - the three real sizes
+# above are never touched or weakened by this existing.
+LABEL_ONLY_SIZES = tuple(f"{size} Label Only" for size in LABEL_SIZES)
+ALL_LABEL_SIZES = LABEL_SIZES + LABEL_ONLY_SIZES
+_LABEL_ONLY_SUFFIX = " Label Only"
+
+
+def is_label_only_size(size: str) -> bool:
+	return bool(size) and size.endswith(_LABEL_ONLY_SUFFIX)
+
+
+def base_size_of(size: str) -> str:
+	"""The real physical size a Label Only choice reuses dimensions from -
+	e.g. "Small Label Only" -> "Small". Any other value (including a plain
+	Small/Medium/Large) is returned unchanged."""
+	if is_label_only_size(size):
+		return size[: -len(_LABEL_ONLY_SUFFIX)]
+	return size
+
+
 _DEFAULT_DISPLAY_RULE = {
 	"alignment": "Left",
 	"show_item_name": 1,
@@ -91,6 +115,18 @@ _DEFAULT_DISPLAY_RULE = {
 	"show_rate": 0,
 	"show_batch_no": 1,
 	"show_serial_no": 1,
+}
+
+# A Label Only size has no barcode at all, so barcode-number/type and
+# batch/serial (only ever resolved for encoding into a barcode - see
+# resolve_row) are never applicable, regardless of the base size's own
+# toggles.
+_DEFAULT_LABEL_ONLY_DISPLAY_RULE = {
+	**_DEFAULT_DISPLAY_RULE,
+	"show_barcode_number": 0,
+	"show_barcode_type": 0,
+	"show_batch_no": 0,
+	"show_serial_no": 0,
 }
 
 
@@ -116,7 +152,10 @@ def get_print_barcode_page_defaults() -> dict:
 def get_barcode_print_settings() -> dict:
 	settings = frappe.get_single("Barcode Print Settings")
 
-	display_rules = {size: dict(_DEFAULT_DISPLAY_RULE) for size in ("Small", "Medium", "Large")}
+	display_rules = {
+		size: dict(_DEFAULT_LABEL_ONLY_DISPLAY_RULE if is_label_only_size(size) else _DEFAULT_DISPLAY_RULE)
+		for size in ALL_LABEL_SIZES
+	}
 	for row in settings.get("display_rules") or []:
 		if row.label_size not in display_rules:
 			continue
