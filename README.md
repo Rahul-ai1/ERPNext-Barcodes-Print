@@ -1,5 +1,7 @@
 # Barcodes Print
 
+<img src="docs/marketplace/logo.png" alt="Barcodes Print logo" width="96" height="96">
+
 [![CI](https://github.com/Rahul-ai1/ERPNext-Barcodes-Print/actions/workflows/ci.yml/badge.svg)](https://github.com/Rahul-ai1/ERPNext-Barcodes-Print/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](license.txt)
 

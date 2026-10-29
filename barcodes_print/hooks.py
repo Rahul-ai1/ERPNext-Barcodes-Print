@@ -9,7 +9,7 @@ app_license = "MIT"
 # letter avatar, regardless of the Dock/Sidebar fixtures' own icon fields.
 # "?v=1" makes browsers fetch the logo again after it changes (assets are
 # otherwise cached for a year).
-app_logo_url = "/assets/barcodes_print/icons/desktop_icons/subtle/barcodes_print.svg?v=1"
+app_logo_url = "/assets/barcodes_print/icons/desktop_icons/subtle/barcodes_print.svg?v=2"
 app_home = "/app/barcodes-print"
 required_apps = ["erpnext"]
 
