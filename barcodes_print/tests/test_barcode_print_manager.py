@@ -183,6 +183,20 @@ class TestBarcodePrintManager(FrappeTestCase):
 			"supplier_type": "Company",
 		}).insert(ignore_permissions=True).name
 
+	def _get_or_create_price_list(self):
+		"""A dev bench that's run the setup wizard already has the standard
+		Buying/Selling Price Lists; a fresh CI site has none - create a
+		minimal selling one rather than assuming it exists."""
+		existing = frappe.get_all("Price List", filters={"selling": 1}, limit=1)
+		if existing:
+			return existing[0].name
+		return frappe.get_doc({
+			"doctype": "Price List",
+			"price_list_name": "_Test Price List",
+			"selling": 1,
+			"currency": "INR",
+		}).insert(ignore_permissions=True).name
+
 	def test_autofetch_case1_barcode_available(self):
 		"""Case 1: Item with barcode in Item Master -> resolve_row auto-fetches
 		Item Name, UOM, Barcode, Barcode Type."""
@@ -690,25 +704,53 @@ class TestBarcodePrintManager(FrappeTestCase):
 		zpl_with_price = build_label_zpl(row_with_price, settings, "Medium")
 		self.assertIn(frappe.utils.fmt_money(10), zpl_with_price)
 
+	def _ensure_leaf_tax_accounts(self, company, count):
+		"""At least `count` non-group Tax accounts for `company`. A fresh
+		CI site's default "Standard" Chart of Accounts (Company.chart_of_accounts
+		defaults to "Standard" regardless of Country - see company.py
+		validate_coa_input) creates exactly one Tax-type account, "Duties
+		and Taxes", and it's a group account - so there's no leaf Tax
+		account to use until one is created here."""
+		existing = frappe.get_all(
+			"Account",
+			filters={"company": company, "is_group": 0, "account_type": "Tax"},
+			fields=["name"],
+			limit=count,
+		)
+		if len(existing) >= count:
+			return [a.name for a in existing]
+
+		parent = frappe.db.get_value(
+			"Account", {"company": company, "account_type": "Tax", "is_group": 1}, "name"
+		) or frappe.db.get_value(
+			"Account", {"company": company, "is_group": 1, "root_type": "Liability"}, "name"
+		)
+
+		for i in range(len(existing), count):
+			acc = frappe.get_doc({
+				"doctype": "Account",
+				"account_name": f"Test Tax {i + 1} {frappe.generate_hash(length=4)}",
+				"company": company,
+				"parent_account": parent,
+				"is_group": 0,
+				"account_type": "Tax",
+			}).insert(ignore_permissions=True)
+			existing.append(frappe._dict(name=acc.name))
+		return [a.name for a in existing]
+
 	def _create_item_tax_template(self, company, total_rate):
 		"""A minimal Item Tax Template for `company` whose detail rows sum
 		to `total_rate` percent - split across two distinct Tax accounts
 		(CGST/SGST-style) when more than one exists, otherwise one row -
 		ERPNext rejects the same account appearing twice in one template."""
-		accounts = frappe.get_all(
-			"Account",
-			filters={"company": company, "is_group": 0, "account_type": "Tax"},
-			limit=2,
-		)
-		if not accounts:
-			frappe.throw(f"No Tax account found for {company} - cannot build a test Item Tax Template.")
+		accounts = self._ensure_leaf_tax_accounts(company, 2)
 		if len(accounts) >= 2:
 			taxes = [
-				{"tax_type": accounts[0].name, "tax_rate": total_rate / 2},
-				{"tax_type": accounts[1].name, "tax_rate": total_rate / 2},
+				{"tax_type": accounts[0], "tax_rate": total_rate / 2},
+				{"tax_type": accounts[1], "tax_rate": total_rate / 2},
 			]
 		else:
-			taxes = [{"tax_type": accounts[0].name, "tax_rate": total_rate}]
+			taxes = [{"tax_type": accounts[0], "tax_rate": total_rate}]
 		return frappe.get_doc({
 			"doctype": "Item Tax Template",
 			"title": f"Test Tax {total_rate}% {frappe.generate_hash(length=4)}",
@@ -730,13 +772,23 @@ class TestBarcodePrintManager(FrappeTestCase):
 		company = self._get_or_create_company()
 		template = self._create_item_tax_template(company, 10)
 		item_code = self._create_test_item_with_barcode()
-		price_list = frappe.get_all("Price List", limit=1)[0].name
-		frappe.get_doc({
-			"doctype": "Item Price",
-			"item_code": item_code,
-			"price_list": price_list,
-			"price_list_rate": 200,
-		}).insert(ignore_permissions=True)
+		price_list = self._get_or_create_price_list()
+		# Item.after_insert() auto-creates an Item Price from standard_rate
+		# for whichever Price List is the default Selling one at that
+		# moment - if that's the same list resolved above, update it
+		# in place instead of inserting a conflicting duplicate row.
+		existing_price = frappe.db.get_value(
+			"Item Price", {"item_code": item_code, "price_list": price_list}, "name"
+		)
+		if existing_price:
+			frappe.db.set_value("Item Price", existing_price, "price_list_rate", 200)
+		else:
+			frappe.get_doc({
+				"doctype": "Item Price",
+				"item_code": item_code,
+				"price_list": price_list,
+				"price_list_rate": 200,
+			}).insert(ignore_permissions=True)
 
 		rate, note = get_item_rate_and_note(item_code, price_list, "")
 		self.assertEqual(rate, 200)
