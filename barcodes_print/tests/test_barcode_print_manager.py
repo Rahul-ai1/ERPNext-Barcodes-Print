@@ -17,7 +17,7 @@ from barcodes_print.api.item import (
 )
 from barcodes_print.api.printer import get_my_default_printer, set_my_default_printer
 from barcodes_print.api.zpl import (
-	_get_purchase_receipt_batch_serial_map,
+	_get_batch_serial_map,
 	build_label_zpl,
 	get_label_dimensions_dots,
 	get_purchase_document_items,
@@ -176,7 +176,32 @@ class TestBarcodePrintManager(FrappeTestCase):
 				"country": "India",
 			}).insert(ignore_permissions=True).name
 		self._ensure_fiscal_year_for_company(company_name)
+		self._ensure_company_cost_center(company_name)
 		return company_name
+
+	def _ensure_company_cost_center(self, company_name):
+		"""A freshly-inserted Company always gets a working default Cost
+		Center from ERPNext's own Company controller - but a dev bench's
+		pre-existing real Company may have been set up without ever running
+		the full Setup Wizard, leaving this blank. Purchase Invoice
+		submission posts GL entries immediately and throws if no Cost
+		Center resolves for a P&L account, unlike Purchase Order/Receipt -
+		so this is only actually needed before creating a Purchase Invoice,
+		but is harmless to ensure for every company regardless."""
+		if frappe.db.get_value("Company", company_name, "cost_center"):
+			return
+		existing = frappe.get_all("Cost Center", filters={"company": company_name, "is_group": 0}, limit=1)
+		if existing:
+			cost_center = existing[0].name
+		else:
+			abbr = frappe.db.get_value("Company", company_name, "abbr")
+			cost_center = frappe.get_doc({
+				"doctype": "Cost Center",
+				"cost_center_name": "Main",
+				"company": company_name,
+				"is_group": 0,
+			}).insert(ignore_permissions=True).name
+		frappe.db.set_value("Company", company_name, "cost_center", cost_center)
 
 	def _get_or_create_supplier(self):
 		existing = frappe.get_all("Supplier", limit=1)
@@ -1035,12 +1060,33 @@ class TestBarcodePrintManager(FrappeTestCase):
 		po.submit()
 		return po
 
+	def _create_purchase_invoice(self, item_rows, update_stock=0):
+		supplier = self._get_or_create_supplier()
+		company = self._get_or_create_company()
+		if update_stock:
+			# A Purchase Invoice only ever carries real batch/serial data
+			# (legacy fields or a Serial and Batch Bundle) when it's also
+			# updating stock - a plain billing-only invoice doesn't touch
+			# them at all, so every row needs its own warehouse here.
+			warehouse = frappe.get_all("Warehouse", filters={"company": company}, limit=1)[0].name
+			for row in item_rows:
+				row.setdefault("warehouse", warehouse)
+		pi = frappe.get_doc({
+			"doctype": "Purchase Invoice",
+			"supplier": supplier,
+			"company": company,
+			"update_stock": update_stock,
+			"items": item_rows,
+		}).insert(ignore_permissions=True)
+		pi.submit()
+		return pi
+
 	def _create_purchase_receipt_item_row(self, item_row):
 		"""A single-row Purchase Receipt, left as a draft - this is only
-		ever used to test _get_purchase_receipt_batch_serial_map directly,
-		which reads Purchase Receipt Item rows regardless of docstatus, so
-		submitting (and the stock/GL postings that would trigger) is never
-		needed here. Returns the row's own name."""
+		ever used to test _get_batch_serial_map directly, which reads
+		Purchase Receipt Item rows regardless of docstatus, so submitting
+		(and the stock/GL postings that would trigger) is never needed
+		here. Returns the row's own name."""
 		supplier = self._get_or_create_supplier()
 		company = self._get_or_create_company()
 		warehouse = frappe.get_all("Warehouse", filters={"company": company}, limit=1)[0].name
@@ -1065,7 +1111,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 			"batch_no": batch_no,
 		})
 
-		result = _get_purchase_receipt_batch_serial_map([row_name])
+		result = _get_batch_serial_map("Purchase Receipt Item", [row_name])
 		self.assertEqual(result[row_name], {"batch_no": batch_no, "serial_no": ""})
 
 	def test_purchase_receipt_batch_serial_map_bundle_mode(self):
@@ -1113,7 +1159,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 			"serial_and_batch_bundle": bundle.name,
 		})
 
-		result = _get_purchase_receipt_batch_serial_map([row_name])
+		result = _get_batch_serial_map("Purchase Receipt Item", [row_name])
 		self.assertEqual(result[row_name]["batch_no"], "")
 		self.assertEqual(set(result[row_name]["serial_no"].splitlines()), set(serials))
 
@@ -1170,6 +1216,141 @@ class TestBarcodePrintManager(FrappeTestCase):
 			settings_doc.enable_purchase_document_printing = 0
 			settings_doc.purchase_document_type = ""
 			settings_doc.save(ignore_permissions=True)
+
+	def test_get_purchase_document_items_for_purchase_invoice(self):
+		"""Purchase Invoice mirrors Purchase Order/Receipt's own pattern:
+		service items excluded, Company/Tax Template fetched per line from
+		the invoice itself, and - since an invoice line can carry a real
+		batch/serial the same way a Receipt line can - batch_no/serial_no
+		resolved via the same shared _get_batch_serial_map."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.enable_purchase_document_printing = 1
+		settings_doc.purchase_document_type = "Purchase Invoice"
+		settings_doc.save(ignore_permissions=True)
+
+		item_code, batch_no = self._create_batch_tracked_item()
+		service_item = self._create_service_item()
+		company = self._get_or_create_company()
+		template = self._create_item_tax_template(company, 5)
+
+		pi = self._create_purchase_invoice([
+			{
+				"item_code": item_code, "qty": 3, "rate": 10,
+				"use_serial_batch_fields": 1, "batch_no": batch_no,
+				"item_tax_template": template.name,
+			},
+			{"item_code": service_item, "qty": 1, "rate": 5},
+		])
+
+		try:
+			prefill = get_purchase_document_items("Purchase Invoice", pi.name)
+			self.assertEqual(len(prefill["items"]), 1)  # service line excluded
+			row = prefill["items"][0]
+			self.assertEqual(row["item"], item_code)
+			self.assertEqual(row["company"], company)
+			self.assertEqual(row["tax_template"], template.name)
+			self.assertEqual(row["batch_no"], batch_no)
+		finally:
+			pi.cancel()
+			frappe.delete_doc("Purchase Invoice", pi.name, force=True, ignore_permissions=True)
+			settings_doc.enable_purchase_document_printing = 0
+			settings_doc.purchase_document_type = ""
+			settings_doc.save(ignore_permissions=True)
+
+	def test_get_purchase_document_items_blocks_return_purchase_invoice(self):
+		"""A Return (credit note) Purchase Invoice is explicitly out of
+		scope - printing from one is blocked, matching how printing from a
+		subcontracted Purchase Order is blocked."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.enable_purchase_document_printing = 1
+		settings_doc.purchase_document_type = "Purchase Invoice"
+		settings_doc.save(ignore_permissions=True)
+
+		item_code = self._create_test_item_with_barcode()
+		pi = self._create_purchase_invoice([{"item_code": item_code, "qty": 2, "rate": 10}])
+		# Bypasses ERPNext's own Return-document validation (a real return
+		# needs a linked original invoice, negative qty, etc.) - only the
+		# specific flag this code path actually checks needs to be true.
+		frappe.db.set_value("Purchase Invoice", pi.name, "is_return", 1)
+
+		try:
+			with self.assertRaises(frappe.ValidationError):
+				get_purchase_document_items("Purchase Invoice", pi.name)
+		finally:
+			frappe.db.set_value("Purchase Invoice", pi.name, "is_return", 0)
+			pi.reload()
+			pi.cancel()
+			frappe.delete_doc("Purchase Invoice", pi.name, force=True, ignore_permissions=True)
+			settings_doc.enable_purchase_document_printing = 0
+			settings_doc.purchase_document_type = ""
+			settings_doc.save(ignore_permissions=True)
+
+	def test_is_purchase_print_enabled_for_purchase_invoice(self):
+		"""Purchase Invoice behaves as a normal alternative choice alongside
+		Purchase Order/Purchase Receipt - on only when Settings points at it,
+		not unconditional like Subcontracting Order."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.enable_purchase_document_printing = 1
+		settings_doc.purchase_document_type = "Purchase Invoice"
+		settings_doc.save(ignore_permissions=True)
+
+		try:
+			self.assertTrue(is_purchase_print_enabled_for("Purchase Invoice"))
+			self.assertFalse(is_purchase_print_enabled_for("Purchase Order"))
+			self.assertFalse(is_purchase_print_enabled_for("Purchase Receipt"))
+			self.assertTrue(is_purchase_print_enabled_for("Subcontracting Order"))
+		finally:
+			settings_doc.enable_purchase_document_printing = 0
+			settings_doc.purchase_document_type = ""
+			settings_doc.save(ignore_permissions=True)
+
+	def test_purchase_invoice_batch_serial_map_bundle_mode(self):
+		"""Purchase Invoice Item shares the identical batch/serial recording
+		fields with Purchase Receipt Item, so the same _get_batch_serial_map
+		resolves a Serial and Batch Bundle on an invoice line too."""
+		item_code = f"TEST-ITEM-PI-SERIAL-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "Test PI Serial Item",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": "Nos",
+			"has_serial_no": 1,
+		}).insert(ignore_permissions=True)
+
+		company = self._get_or_create_company()
+		warehouse = frappe.get_all("Warehouse", filters={"company": company}, limit=1)[0].name
+		serial = frappe.get_doc({
+			"doctype": "Serial No",
+			"serial_no": f"TEST-PI-SN-{frappe.generate_hash(length=8)}",
+			"item_code": item_code,
+			"company": company,
+			"status": "Inactive",
+		}).insert(ignore_permissions=True)
+
+		bundle = frappe.get_doc({
+			"doctype": "Serial and Batch Bundle",
+			"item_code": item_code,
+			"warehouse": warehouse,
+			"company": company,
+			"voucher_type": "Purchase Invoice",
+			"type_of_transaction": "Inward",
+			"has_serial_no": 1,
+			"entries": [{"serial_no": serial.name, "qty": 1}],
+		}).insert(ignore_permissions=True)
+
+		pi = self._create_purchase_invoice([{
+			"item_code": item_code, "qty": 1, "rate": 10,
+			"use_serial_batch_fields": 0, "serial_and_batch_bundle": bundle.name,
+		}], update_stock=1)
+		try:
+			row_name = pi.items[0].name
+			result = _get_batch_serial_map("Purchase Invoice Item", [row_name])
+			self.assertEqual(result[row_name]["serial_no"], serial.name)
+		finally:
+			pi.cancel()
+			frappe.delete_doc("Purchase Invoice", pi.name, force=True, ignore_permissions=True)
 
 	def test_is_purchase_print_enabled_for_subcontracting_order_is_unconditional(self):
 		"""Subcontracting Order isn't an alternative choice alongside

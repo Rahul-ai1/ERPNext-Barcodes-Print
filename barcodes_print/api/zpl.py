@@ -410,8 +410,15 @@ def _parse_serial_nos(serial_nos) -> list:
 PURCHASE_ITEM_DOCTYPES = {
 	"Purchase Order": "Purchase Order Item",
 	"Purchase Receipt": "Purchase Receipt Item",
+	"Purchase Invoice": "Purchase Invoice Item",
 	"Subcontracting Order": "Subcontracting Order Item",
 }
+
+# Purchase Receipt and Purchase Invoice lines are the only two that can ever
+# carry a real batch_no/serial_no - both via the same two recording styles
+# (see _get_batch_serial_map). Purchase Order and Subcontracting Order are
+# still just orders, with nothing actually received or assigned yet.
+DOCTYPES_WITH_BATCH_SERIAL = ("Purchase Receipt", "Purchase Invoice")
 
 
 def _is_stock_item(item_code: str) -> bool:
@@ -459,10 +466,12 @@ def is_purchase_print_enabled_for(doctype: str) -> bool:
 	return configured_doctype == doctype
 
 
-def _get_purchase_receipt_batch_serial_map(row_names: list) -> dict:
-	"""Bulk-resolve batch_no/serial_no for a set of Purchase Receipt Item
-	rows, one query each (never a DB call per row), handling both ways
-	ERPNext can record them on a line:
+def _get_batch_serial_map(child_doctype: str, row_names: list) -> dict:
+	"""Bulk-resolve batch_no/serial_no for a set of Purchase Receipt Item or
+	Purchase Invoice Item rows (both child doctypes share the identical
+	batch/serial recording fields), one query each regardless of how many
+	rows (never a DB call per row), handling both ways ERPNext can record
+	them on a line:
 
 	- use_serial_batch_fields=1 (legacy): batch_no/serial_no sit directly
 	  on the row.
@@ -474,7 +483,7 @@ def _get_purchase_receipt_batch_serial_map(row_names: list) -> dict:
 		return {}
 
 	rows = frappe.get_all(
-		"Purchase Receipt Item",
+		child_doctype,
 		filters={"name": ["in", row_names]},
 		fields=["name", "use_serial_batch_fields", "batch_no", "serial_no", "serial_and_batch_bundle"],
 	)
@@ -555,6 +564,11 @@ def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 			).format(source_name)
 		)
 
+	if source_doctype == "Purchase Invoice" and doc.get("is_return"):
+		frappe.throw(
+			_("{0} is a Return - printing from a Return Purchase Invoice is not supported.").format(source_name)
+		)
+
 	# Subcontracting Order's own "items" field is already just the finished
 	# goods table - "service_items"/"supplied_items" are separate fields on
 	# that doctype and are never read here.
@@ -592,11 +606,9 @@ def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 			"tax_template": getattr(row, "item_tax_template", "") or "",
 		})
 
-	# Only Purchase Receipt lines ever carry a real batch_no/serial_no -
-	# Purchase Order and Subcontracting Order are still just orders, with
-	# nothing actually received or assigned yet.
-	if source_doctype == "Purchase Receipt":
-		batch_serial_map = _get_purchase_receipt_batch_serial_map([r["source_row_name"] for r in rows])
+	if source_doctype in DOCTYPES_WITH_BATCH_SERIAL:
+		child_doctype = PURCHASE_ITEM_DOCTYPES[source_doctype]
+		batch_serial_map = _get_batch_serial_map(child_doctype, [r["source_row_name"] for r in rows])
 		for r in rows:
 			info = batch_serial_map.get(r["source_row_name"]) or {}
 			r["batch_no"] = info.get("batch_no", "")

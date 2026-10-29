@@ -53,6 +53,7 @@ doctype_js = {
 	# alongside Purchase Order/Purchase Receipt.
 	"Purchase Order": "public/js/purchase_order.js",
 	"Purchase Receipt": "public/js/purchase_receipt.js",
+	"Purchase Invoice": "public/js/purchase_invoice.js",
 	"Subcontracting Order": "public/js/subcontracting_order.js",
 }
 
