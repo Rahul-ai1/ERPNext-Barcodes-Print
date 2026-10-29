@@ -152,6 +152,22 @@ def _text_line_zpl(margin: int, y: int, available_width: int, fb_justify: str, t
 	return f"^FO{margin},{y}^FB{available_width},1,0,{fb_justify}^A0N,{text_h},{text_h}^FD{_zpl_escape(text)}^FS"
 
 
+def _format_price_line(rate, price_note: str, price_label: str) -> str:
+	"""The Rate/MRP text line - shared by the real barcode path
+	(build_label_zpl) and the text-only Label Only path
+	(_build_label_only_zpl) so the two can't drift apart. "Rate" (the
+	default) prints exactly as this app always has - no prefix word, just
+	the number and its Incl./Excl. of taxes note; "MRP" prefixes the same
+	line with "MRP: ", regardless of whether a Tax Template happens to be
+	set on that row."""
+	price_line = frappe.utils.fmt_money(rate)
+	if price_note:
+		price_line = f"{price_line} ({price_note})"
+	if price_label == "MRP":
+		price_line = f"MRP: {price_line}"
+	return price_line
+
+
 def _aligned_x(alignment: str, margin: int, available_width: int, content_width: int) -> int:
 	"""Left/Center/Right x-origin for one field, clamped so it never lands
 	left of the margin or pushes the content past the label's right edge."""
@@ -214,9 +230,7 @@ def build_label_zpl(row, settings: dict, size: str) -> str:
 		# misleading "0.00". price_note ("Incl./Excl. of taxes") always
 		# rides on the same line - never a bare number, and never the tax
 		# % or Company name themselves, only this short note.
-		price_line = frappe.utils.fmt_money(row.rate)
-		if row.get("price_note"):
-			price_line = f"{price_line} ({row.price_note})"
+		price_line = _format_price_line(row.rate, row.get("price_note") or "", settings.get("price_label") or "Rate")
 		text_lines_after.append(price_line)
 
 	n_lines = len(text_lines_before) + len(text_lines_after)
@@ -297,9 +311,7 @@ def _build_label_only_zpl(row, settings: dict, size: str) -> str:
 	if rules["show_uom"] and row.uom:
 		text_lines.append(f"UOM: {row.uom}")
 	if rules["show_rate"] and row.rate is not None:
-		price_line = frappe.utils.fmt_money(row.rate)
-		if row.get("price_note"):
-			price_line = f"{price_line} ({row.price_note})"
+		price_line = _format_price_line(row.rate, row.get("price_note") or "", settings.get("price_label") or "Rate")
 		text_lines.append(price_line)
 
 	text_height_mm = {"Small": 2.5, "Medium": 3.3, "Large": 4.2}[base_size_of(size)]

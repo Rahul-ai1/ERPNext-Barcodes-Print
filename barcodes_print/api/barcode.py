@@ -188,6 +188,7 @@ def get_barcode_print_settings() -> dict:
 		"unlimited_reprints": cint(settings.get("unlimited_reprints")),
 		"default_price_list": settings.get("default_price_list") or "",
 		"batch_serial_print_mode": settings.get("batch_serial_print_mode") or "Both",
+		"price_label": settings.get("price_label") or "Rate",
 	}
 
 
