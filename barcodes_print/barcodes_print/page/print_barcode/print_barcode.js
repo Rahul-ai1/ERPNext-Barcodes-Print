@@ -181,6 +181,9 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 			in_list_view: 1,
 			label: __("Item"),
 			reqd: 1,
+			get_query: function () {
+				return { filters: { disabled: 0 } };
+			},
 			onchange: function () {
 				const row = this.grid_row;
 				const item_code = this.value;
@@ -393,8 +396,18 @@ barcodes_print.print_barcode_page.render = function (page) {
 
 	// Hints that the Barcode cell is clickable (reopens the barcode-choice
 	// dialog) - the click handler itself is wired up further down, once
-	// the grid exists.
-	$("<style>.print-barcode-page .grid-static-col[data-fieldname='barcode'] { cursor: pointer; }</style>").appendTo($wrapper);
+	// the grid exists. The cell's visible surface is a real <input
+	// disabled> (this field is read_only) - a genuinely disabled form
+	// control never dispatches click events in the browser at all, not
+	// even to ancestor listeners via delegation, so the click would
+	// silently never reach $wrapper's handler without this: pointer-events:
+	// none lets the click pass straight through the input to the
+	// .grid-static-col wrapper div underneath, which isn't disabled and
+	// bubbles normally.
+	$(`<style>
+		.print-barcode-page .grid-static-col[data-fieldname='barcode'] { cursor: pointer; }
+		.print-barcode-page .grid-static-col[data-fieldname='barcode'] input:disabled { pointer-events: none; }
+	</style>`).appendTo($wrapper);
 
 	const $source_banner = $("<div>").appendTo($wrapper);
 

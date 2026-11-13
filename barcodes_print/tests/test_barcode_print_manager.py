@@ -1760,6 +1760,16 @@ class TestBarcodePrintManager(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			resolve_row(other_item, no_of_barcodes=1, batch_no=batch_no)
 
+	def test_resolve_row_blocks_disabled_item(self):
+		"""The grid's own Item picker already filters these out and
+		resolve_scan blocks them too when scanned - this is the last-resort
+		safety net right before a label would actually be built, for a row
+		typed in directly or left over from before the Item was disabled."""
+		item_code = self._create_test_item_with_barcode()
+		frappe.db.set_value("Item", item_code, "disabled", 1)
+		with self.assertRaises(frappe.ValidationError):
+			resolve_row(item_code, no_of_barcodes=1)
+
 	def test_resolve_row_encodes_serial_no_and_inherits_its_batch(self):
 		"""One Serial No always means exactly one physical unit - no_of_barcodes
 		is forced to 1 regardless of what was requested, and the serial's own

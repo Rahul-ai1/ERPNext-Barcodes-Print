@@ -484,6 +484,14 @@ def resolve_row(
 	if not item_code:
 		frappe.throw(_("Item is required."))
 
+	# The grid's own Item picker already filters these out, and
+	# resolve_scan blocks them too when scanned - but a row typed in or
+	# left over from before the Item was disabled could otherwise still
+	# reach an actual printed label with nothing to stop it, since this is
+	# the last point before a label is actually built.
+	if frappe.utils.cint(frappe.get_cached_value("Item", item_code, "disabled")):
+		frappe.throw(_("Item {0} is disabled.").format(item_code))
+
 	no_of_barcodes = frappe.utils.cint(no_of_barcodes) or 1
 	if no_of_barcodes < 1:
 		frappe.throw(_("No. of Barcodes must be at least 1."))
