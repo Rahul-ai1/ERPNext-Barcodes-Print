@@ -514,6 +514,18 @@ barcodes_print.print_barcode_page.render = function (page) {
 			if ($(e.target).closest(".grid-row").length) return;
 			open_row.toggle_view(false);
 		});
+
+		// Configure Columns: tried reusing Frappe's real core dialog here
+		// (giving header_row a minimal frm shim so its own gear
+		// icon/dialog/persistence would work unmodified) - the icon
+		// rendered correctly on both v15 and v16, but opening the dialog
+		// crashed on both: render_selected_columns() calls
+		// frappe.meta.get_docfield("Print Label Item", fieldname), which
+		// returns null because this grid's columns are an inline JS field
+		// list (get_item_fields() below), not read from that DocType's
+		// actual stored schema/client-side meta cache. Reverted - left as
+		// today's existing disabled placeholder rather than ship a button
+		// that crashes on click.
 	});
 };
 
