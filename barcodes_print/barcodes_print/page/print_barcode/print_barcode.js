@@ -487,6 +487,33 @@ barcodes_print.print_barcode_page.render = function (page) {
 
 		barcodes_print.print_barcode_page.update_total();
 		barcodes_print.print_barcode_page.render_my_printer();
+
+		// Clicking anywhere outside an open grid row's own form closes it -
+		// matching every real document's child table. Frappe's own version
+		// of this (dom.js freeze()'s backdrop) only fires through the
+		// global cur_frm, which this page never sets since it's a
+		// standalone page with no document bound to it - so it's wired up
+		// directly here instead, scoped to this page and this grid only.
+		// Bound on document, not $wrapper - freeze()'s own backdrop is
+		// appended straight to <body> (a sibling of $wrapper, not inside
+		// it) while a row is open, so a click there would never reach a
+		// $wrapper-scoped listener. Escape key already works today via
+		// keyboard.js checking .grid-row-open directly, not cur_frm -
+		// untouched by this.
+		// Namespaced and re-bound (not accumulated) each time this page
+		// renders, since render() can run more than once per Desk session
+		// (e.g. revisiting the page) and the listener is on document, not
+		// on $wrapper, so page.main.empty() alone wouldn't clean it up.
+		$(document).off("click.print_barcode_grid_close").on("click.print_barcode_grid_close", (e) => {
+			const open_row = frappe.ui.form.get_open_grid_form();
+			if (!open_row || open_row.grid !== items_control.grid) return;
+			// Clicking inside the open row's own form, or on any row
+			// (including a different one, to switch directly to it) is
+			// already handled by the grid's own native click handling -
+			// only close when the click is genuinely outside every row.
+			if ($(e.target).closest(".grid-row").length) return;
+			open_row.toggle_view(false);
+		});
 	});
 };
 
