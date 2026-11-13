@@ -219,11 +219,26 @@ class TestBarcodePrintManager(FrappeTestCase):
 		existing = frappe.get_all("Supplier", limit=1)
 		if existing:
 			return existing[0].name
-		supplier_group = frappe.get_all("Supplier Group", limit=1)
+		# "All Supplier Groups" is the group-type root node this same test
+		# file creates above - only ever a parent, never assignable to a
+		# real Supplier. An unfiltered query can return that root instead
+		# of a real leaf group (confirmed on Frappe v15, where ERPNext's own
+		# test fixtures create a leaf as its child) - filter to leaves only,
+		# and create one if none exist, rather than falling back to the root.
+		supplier_group = frappe.get_all("Supplier Group", filters={"is_group": 0}, limit=1)
+		if supplier_group:
+			supplier_group_name = supplier_group[0].name
+		else:
+			supplier_group_name = frappe.get_doc({
+				"doctype": "Supplier Group",
+				"supplier_group_name": "_Test Supplier Group",
+				"parent_supplier_group": "All Supplier Groups",
+				"is_group": 0,
+			}).insert(ignore_permissions=True).name
 		return frappe.get_doc({
 			"doctype": "Supplier",
 			"supplier_name": "_Test Supplier",
-			"supplier_group": supplier_group[0].name if supplier_group else "All Supplier Groups",
+			"supplier_group": supplier_group_name,
 			"supplier_type": "Company",
 		}).insert(ignore_permissions=True).name
 
