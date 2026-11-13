@@ -1097,6 +1097,28 @@ class TestBarcodePrintManager(FrappeTestCase):
 	def test_get_barcode_print_settings_defaults_price_label_to_rate(self):
 		self.assertEqual(get_barcode_print_settings()["price_label"], "Rate")
 
+	def test_get_purchase_document_items_rounds_fractional_qty_upward(self):
+		"""A label can't be a fraction of itself - 15.05 must suggest 16
+		labels, not 15 (plain truncation would silently leave 0.05 of a
+		unit unlabelled)."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.enable_purchase_document_printing = 1
+		settings_doc.purchase_document_type = "Purchase Order"
+		settings_doc.save(ignore_permissions=True)
+
+		item_code = self._create_test_item_with_barcode()
+		po = self._create_purchase_order([{"item_code": item_code, "qty": 15.05, "rate": 10}])
+
+		try:
+			prefill = get_purchase_document_items("Purchase Order", po.name)
+			self.assertEqual(prefill["items"][0]["no_of_barcodes"], 16)
+		finally:
+			po.cancel()
+			frappe.delete_doc("Purchase Order", po.name, force=True, ignore_permissions=True)
+			settings_doc.enable_purchase_document_printing = 0
+			settings_doc.purchase_document_type = ""
+			settings_doc.save(ignore_permissions=True)
+
 	def test_get_purchase_document_items_fetches_company_and_tax_template_per_line(self):
 		"""Company/Tax Template are auto-fetched straight from the Purchase
 		Order's own document/line - never a user or site default."""
@@ -1538,8 +1560,10 @@ class TestBarcodePrintManager(FrappeTestCase):
 
 	def test_is_purchase_print_enabled_for_purchase_invoice(self):
 		"""Purchase Invoice behaves as a normal alternative choice alongside
-		Purchase Order/Purchase Receipt - on only when Settings points at it,
-		not unconditional like Subcontracting Order."""
+		Purchase Order/Purchase Receipt - on only when Settings points at it.
+		Subcontracting Order/Receipt are a fully independent pair with their
+		own master switch, untouched by the Purchase one here - off by
+		default since enable_subcontracting_document_printing isn't set."""
 		settings_doc = frappe.get_single("Barcode Print Settings")
 		settings_doc.enable_purchase_document_printing = 1
 		settings_doc.purchase_document_type = "Purchase Invoice"
@@ -1549,7 +1573,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 			self.assertTrue(is_purchase_print_enabled_for("Purchase Invoice"))
 			self.assertFalse(is_purchase_print_enabled_for("Purchase Order"))
 			self.assertFalse(is_purchase_print_enabled_for("Purchase Receipt"))
-			self.assertTrue(is_purchase_print_enabled_for("Subcontracting Order"))
+			self.assertFalse(is_purchase_print_enabled_for("Subcontracting Order"))
 		finally:
 			settings_doc.enable_purchase_document_printing = 0
 			settings_doc.purchase_document_type = ""
@@ -1603,22 +1627,36 @@ class TestBarcodePrintManager(FrappeTestCase):
 			pi.cancel()
 			frappe.delete_doc("Purchase Invoice", pi.name, force=True, ignore_permissions=True)
 
-	def test_is_purchase_print_enabled_for_subcontracting_order_is_unconditional(self):
-		"""Subcontracting Order isn't an alternative choice alongside
-		Purchase Order/Purchase Receipt in the settings - it's always on
-		once purchase-document printing is enabled at all."""
+	def test_is_purchase_print_enabled_for_subcontracting_is_independent_of_purchase(self):
+		"""Subcontracting Order/Receipt are gated by their own separate
+		master switch (enable_subcontracting_document_printing +
+		subcontracting_document_type) - fully independent of the Purchase
+		Document pair, not unconditional and not tied to it either way."""
 		settings_doc = frappe.get_single("Barcode Print Settings")
 		settings_doc.enable_purchase_document_printing = 1
 		settings_doc.purchase_document_type = "Purchase Receipt"
 		settings_doc.save(ignore_permissions=True)
 
 		try:
-			self.assertTrue(is_purchase_print_enabled_for("Subcontracting Order"))
+			# Purchase-only settings touched so far - subcontracting stays off.
+			self.assertFalse(is_purchase_print_enabled_for("Subcontracting Order"))
+			self.assertFalse(is_purchase_print_enabled_for("Subcontracting Receipt"))
 			self.assertFalse(is_purchase_print_enabled_for("Purchase Order"))
+			self.assertTrue(is_purchase_print_enabled_for("Purchase Receipt"))
+
+			# Enabling subcontracting independently doesn't disturb Purchase.
+			settings_doc.enable_subcontracting_document_printing = 1
+			settings_doc.subcontracting_document_type = "Subcontracting Order"
+			settings_doc.save(ignore_permissions=True)
+
+			self.assertTrue(is_purchase_print_enabled_for("Subcontracting Order"))
+			self.assertFalse(is_purchase_print_enabled_for("Subcontracting Receipt"))
 			self.assertTrue(is_purchase_print_enabled_for("Purchase Receipt"))
 		finally:
 			settings_doc.enable_purchase_document_printing = 0
 			settings_doc.purchase_document_type = ""
+			settings_doc.enable_subcontracting_document_printing = 0
+			settings_doc.subcontracting_document_type = ""
 			settings_doc.save(ignore_permissions=True)
 
 	def test_mm_to_dots_conversion(self):

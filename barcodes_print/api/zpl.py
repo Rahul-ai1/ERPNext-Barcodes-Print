@@ -18,6 +18,7 @@ Barcode Print Settings) - see public/js/qz_tray_print.js and
 public/js/zebra_browser_print.js.
 """
 
+import math
 import re
 
 import frappe
@@ -599,26 +600,32 @@ def _parse_serial_nos(serial_nos) -> list:
 	return [str(s).strip() for s in serial_nos if str(s).strip()]
 
 
-# Maps a Purchase Document Type (Barcode Print Settings, plus Subcontracting
-# Order which is always available - see is_purchase_print_enabled_for) to
-# its items child doctype - all three get the "Barcodes Printed" counter
-# field (see install.after_install.ensure_purchase_barcode_tracking_fields),
-# so switching the setting later doesn't require adding fields again.
-# Subcontracting Order's own "items" field is specifically its finished-goods
-# table - its "service_items"/"supplied_items" child tables are deliberately
-# never touched here.
+# Maps a Purchase/Subcontracting Document Type (Barcode Print Settings - two
+# independent single-selects, see is_purchase_print_enabled_for) to its
+# items child doctype - all five get the "Barcodes Printed" counter field
+# (see install.after_install.ensure_purchase_barcode_tracking_fields), so
+# switching either setting later doesn't require adding fields again.
+# Subcontracting Order/Receipt's own "items" field is specifically their
+# finished-goods table - their "service_items"/"supplied_items" child
+# tables are deliberately never touched here. Purchase Receipt Item and
+# Subcontracting Receipt Item's own "qty" field is itself already labelled
+# "Accepted Quantity"/"Accepted Qty" in ERPNext's own schema (separate from
+# received_qty and rejected_qty) - reading it here already means
+# accepted-only, with no extra filtering needed.
 PURCHASE_ITEM_DOCTYPES = {
 	"Purchase Order": "Purchase Order Item",
 	"Purchase Receipt": "Purchase Receipt Item",
 	"Purchase Invoice": "Purchase Invoice Item",
 	"Subcontracting Order": "Subcontracting Order Item",
+	"Subcontracting Receipt": "Subcontracting Receipt Item",
 }
 
-# Purchase Receipt and Purchase Invoice lines are the only two that can ever
-# carry a real batch_no/serial_no - both via the same two recording styles
-# (see _get_batch_serial_map). Purchase Order and Subcontracting Order are
-# still just orders, with nothing actually received or assigned yet.
-DOCTYPES_WITH_BATCH_SERIAL = ("Purchase Receipt", "Purchase Invoice")
+# Purchase Receipt, Purchase Invoice, and Subcontracting Receipt lines are
+# the only ones that can ever carry a real batch_no/serial_no - Subcontracting
+# Receipt Item has the identical two recording styles as the other two (see
+# _get_batch_serial_map). Purchase Order and Subcontracting Order are still
+# just orders, with nothing actually received or assigned yet.
+DOCTYPES_WITH_BATCH_SERIAL = ("Purchase Receipt", "Purchase Invoice", "Subcontracting Receipt")
 
 
 def _is_stock_item(item_code: str) -> bool:
@@ -647,31 +654,37 @@ def _get_purchase_line_allowance(source_doctype: str, row_name: str, max_extra: 
 @frappe.whitelist()
 def is_purchase_print_enabled_for(doctype: str) -> bool:
 	"""Lightweight, permission-light check used by the Print Barcode button
-	on Purchase Order/Purchase Receipt/Subcontracting Order forms
-	(public/js/purchase_barcode_button.js). Uses a raw single-value DB read
-	rather than get_barcode_print_settings() deliberately: Barcode Print
-	Settings itself is read-restricted to System Manager, but anyone who can
-	already view the source document should be able to see whether this
-	button applies, without needing separate access to Settings."""
+	on Purchase Order/Purchase Receipt/Purchase Invoice/Subcontracting
+	Order/Subcontracting Receipt forms (public/js/purchase_barcode_button.js).
+	Uses raw single-value DB reads rather than get_barcode_print_settings()
+	deliberately: Barcode Print Settings itself is read-restricted to System
+	Manager, but anyone who can already view the source document should be
+	able to see whether this button applies, without needing separate access
+	to Settings.
+
+	Purchase Order/Receipt/Invoice and Subcontracting Order/Receipt are two
+	fully independent pairs, each gated by its own enable switch + single-select
+	- either pair can be on, off, or both at once."""
+	if doctype in ("Subcontracting Order", "Subcontracting Receipt"):
+		enabled = frappe.db.get_single_value("Barcode Print Settings", "enable_subcontracting_document_printing")
+		if not enabled:
+			return False
+		configured_doctype = frappe.db.get_single_value("Barcode Print Settings", "subcontracting_document_type")
+		return configured_doctype == doctype
+
 	enabled = frappe.db.get_single_value("Barcode Print Settings", "enable_purchase_document_printing")
 	if not enabled:
 		return False
-	if doctype == "Subcontracting Order":
-		# Not an alternative alongside Purchase Order/Purchase Receipt - this
-		# is where a *subcontracted* Purchase Order's own button redirects
-		# to, so it's available whenever purchase-document printing is on
-		# at all, regardless of which of the other two is configured.
-		return True
 	configured_doctype = frappe.db.get_single_value("Barcode Print Settings", "purchase_document_type")
 	return configured_doctype == doctype
 
 
 def _get_batch_serial_map(child_doctype: str, row_names: list) -> dict:
-	"""Bulk-resolve batch_no/serial_no for a set of Purchase Receipt Item or
-	Purchase Invoice Item rows (both child doctypes share the identical
-	batch/serial recording fields), one query each regardless of how many
-	rows (never a DB call per row), handling both ways ERPNext can record
-	them on a line:
+	"""Bulk-resolve batch_no/serial_no for a set of Purchase Receipt Item,
+	Purchase Invoice Item, or Subcontracting Receipt Item rows (all three
+	child doctypes share the identical batch/serial recording fields), one
+	query each regardless of how many rows (never a DB call per row),
+	handling both ways ERPNext can record them on a line:
 
 	- use_serial_batch_fields=1 (legacy): batch_no/serial_no sit directly
 	  on the row.
@@ -732,8 +745,9 @@ def _get_batch_serial_map(child_doctype: str, row_names: list) -> dict:
 @frappe.whitelist()
 def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 	"""Pre-fill data for the Print Barcode page when opened via the Print
-	Barcode button on a submitted Purchase Order/Purchase Receipt/
-	Subcontracting Order. Each row's starting 'No. of Barcodes' always
+	Barcode button on a submitted Purchase Order/Purchase Receipt/Purchase
+	Invoice/Subcontracting Order/Subcontracting Receipt. Each row's starting
+	'No. of Barcodes' always
 	defaults to that line's own quantity, never quantity + extra - the
 	Max Extra Barcodes per Line allowance (or no limit at all, in
 	unlimited_reprints mode) only ever matters if the user deliberately
@@ -741,42 +755,56 @@ def get_purchase_document_items(source_doctype: str, source_name: str) -> dict:
 	Service/non-stock item rows are skipped outright - they have no
 	physical unit to label."""
 	settings = get_barcode_print_settings()
-	if not settings["enable_purchase_document_printing"]:
-		frappe.throw(_("Printing from a Purchase Document is not enabled in Barcode Print Settings."))
-	if source_doctype != "Subcontracting Order" and settings["purchase_document_type"] != source_doctype:
-		frappe.throw(
-			_("Barcode Print Settings is currently configured for {0}, not {1}.").format(
-				settings["purchase_document_type"] or _("no document"), source_doctype
+	is_subcontracting_doctype = source_doctype in ("Subcontracting Order", "Subcontracting Receipt")
+	if is_subcontracting_doctype:
+		if not settings["enable_subcontracting_document_printing"]:
+			frappe.throw(_("Printing from a Subcontracting Document is not enabled in Barcode Print Settings."))
+		if settings["subcontracting_document_type"] != source_doctype:
+			frappe.throw(
+				_("Barcode Print Settings is currently configured for {0}, not {1}.").format(
+					settings["subcontracting_document_type"] or _("no document"), source_doctype
+				)
 			)
-		)
+	else:
+		if not settings["enable_purchase_document_printing"]:
+			frappe.throw(_("Printing from a Purchase Document is not enabled in Barcode Print Settings."))
+		if settings["purchase_document_type"] != source_doctype:
+			frappe.throw(
+				_("Barcode Print Settings is currently configured for {0}, not {1}.").format(
+					settings["purchase_document_type"] or _("no document"), source_doctype
+				)
+			)
 
 	frappe.has_permission(source_doctype, "read", throw=True)
 	doc = frappe.get_doc(source_doctype, source_name)
 	if doc.docstatus != 1:
 		frappe.throw(_("{0} must be submitted before printing barcodes.").format(source_doctype))
 
-	if source_doctype == "Purchase Order" and doc.get("is_subcontracted"):
+	if source_doctype in ("Purchase Order", "Purchase Receipt", "Purchase Invoice") and doc.get("is_subcontracted"):
 		frappe.throw(
 			_(
 				"{0} is subcontracted - its own items are what's being purchased from the "
 				"subcontractor, not what's being received. Print barcodes from its Subcontracting "
-				"Order instead."
+				"Order/Receipt instead."
 			).format(source_name)
 		)
 
-	if source_doctype == "Purchase Invoice" and doc.get("is_return"):
+	if source_doctype in ("Purchase Invoice", "Subcontracting Receipt") and doc.get("is_return"):
 		frappe.throw(
-			_("{0} is a Return - printing from a Return Purchase Invoice is not supported.").format(source_name)
+			_("{0} is a Return - printing from a Return document is not supported.").format(source_name)
 		)
 
-	# Subcontracting Order's own "items" field is already just the finished
-	# goods table - "service_items"/"supplied_items" are separate fields on
-	# that doctype and are never read here.
+	# Subcontracting Order/Receipt's own "items" field is already just the
+	# finished goods table - "service_items"/"supplied_items" are separate
+	# fields on those doctypes and are never read here.
 	rows = []
 	for row in doc.items:
 		if not _is_stock_item(row.item_code):
 			continue
-		qty = frappe.utils.cint(row.qty)
+		# A label can't be a fraction of itself - always round up, never
+		# truncate, so a line quantity like 15.05 suggests 16 labels, not
+		# 15 (which would silently leave 0.05 of a unit unlabelled).
+		qty = math.ceil(frappe.utils.flt(row.qty))
 		# Always defaults to the line's own quantity - never quantity + extra.
 		# The extra allowance (or no limit at all, in unlimited_reprints
 		# mode) only ever matters if the user deliberately raises this
