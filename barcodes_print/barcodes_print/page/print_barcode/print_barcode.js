@@ -540,25 +540,43 @@ barcodes_print.print_barcode_page.render = function (page) {
 		// dialog trivially offers just that one choice), and always
 		// listing every barcode the item has, including whichever one is
 		// currently selected/Default, so switching to or back to any of
-		// them is unrestricted. Delegated on $wrapper (not bound per-row)
-		// so it keeps working for rows added/removed after this runs,
-		// with no re-binding needed. stopPropagation keeps this from also
-		// triggering the row's own open-row click handling - same
-		// click-to-pick pattern as the Item field's own Link control.
-		$wrapper.on("click", ".grid-static-col[data-fieldname='barcode']", function (e) {
-			e.stopPropagation();
-			const row = $(this).closest(".grid-row").data("grid_row");
-			if (!row || !row.doc || !row.doc.item) return;
-			frappe.call({
-				method: "barcodes_print.api.item.get_item_barcode_details",
-				args: { item_code: row.doc.item },
-				callback(r) {
-					const choices = (r.message || {}).barcodes || [];
-					if (!choices.length) return;
-					barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
-				},
-			});
-		});
+		// them is unrestricted.
+		//
+		// Bound on the capture phase via a native addEventListener, not
+		// jQuery's own (bubble-phase only) delegation - this grid runs in
+		// Frappe's "editable grid" mode, where grid_row.js's own native
+		// per-cell click handler (toggle_editable_row, bound directly on
+		// each cell) returns false whenever allow_on_grid_editing() &&
+		// is_editable() are both true, which they are here. A jQuery
+		// handler returning false is preventDefault()+stopPropagation()
+		// together - it kills the event before it can ever bubble up to a
+		// $wrapper-level handler, confirmed live (a bubble-phase listener
+		// on document never saw the click at all). Capture phase runs
+		// top-down, before that native handler gets a chance to act, so
+		// it sees the click unconditionally - stopPropagation here (still
+		// in capture) then correctly prevents that native handler from
+		// also firing for this one click, same as the old approach
+		// intended, just from the phase that actually works.
+		$wrapper[0].addEventListener(
+			"click",
+			(e) => {
+				const cell = e.target.closest(".grid-static-col[data-fieldname='barcode']");
+				if (!cell) return;
+				e.stopPropagation();
+				const row = $(cell).closest(".grid-row").data("grid_row");
+				if (!row || !row.doc || !row.doc.item) return;
+				frappe.call({
+					method: "barcodes_print.api.item.get_item_barcode_details",
+					args: { item_code: row.doc.item },
+					callback(r) {
+						const choices = (r.message || {}).barcodes || [];
+						if (!choices.length) return;
+						barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
+					},
+				});
+			},
+			true
+		);
 
 		// Real Frappe "Configure Columns" - the actual core dialog, not a
 		// reimplementation. First attempt (giving header_row a frm shim
