@@ -107,6 +107,16 @@ class TestBarcodePrintManager(FrappeTestCase):
 					"doctype": "UOM",
 					"uom_name": uom,
 				}).insert(ignore_permissions=True)
+		if not frappe.db.exists("Party Type", "Supplier"):
+			# Purchase Invoice submission posts GL Entries against this
+			# Supplier, and GL Entry.validate_party() rejects any
+			# party_type not registered here - also normally seeded by
+			# the setup wizard, not by install-app alone.
+			frappe.get_doc({
+				"doctype": "Party Type",
+				"party_type": "Supplier",
+				"account_type": "Payable",
+			}).insert(ignore_permissions=True)
 		if not frappe.db.exists("Supplier Group", "All Supplier Groups"):
 			frappe.get_doc({
 				"doctype": "Supplier Group",
