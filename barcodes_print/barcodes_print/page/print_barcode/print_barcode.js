@@ -515,17 +515,97 @@ barcodes_print.print_barcode_page.render = function (page) {
 			open_row.toggle_view(false);
 		});
 
-		// Configure Columns: tried reusing Frappe's real core dialog here
-		// (giving header_row a minimal frm shim so its own gear
-		// icon/dialog/persistence would work unmodified) - the icon
-		// rendered correctly on both v15 and v16, but opening the dialog
-		// crashed on both: render_selected_columns() calls
+		// Real Frappe "Configure Columns" - the actual core dialog, not a
+		// reimplementation. First attempt (giving header_row a frm shim
+		// alone) rendered the icon correctly on both versions, but opening
+		// the dialog crashed on both: render_selected_columns() calls
 		// frappe.meta.get_docfield("Print Label Item", fieldname), which
-		// returns null because this grid's columns are an inline JS field
-		// list (get_item_fields() below), not read from that DocType's
-		// actual stored schema/client-side meta cache. Reverted - left as
-		// today's existing disabled placeholder rather than ship a button
-		// that crashes on click.
+		// needs that DocType's real metadata loaded client-side first
+		// (never happens on this page, since nothing here is ever loaded
+		// as a real document) - and "Stock Qty" isn't a real field on
+		// that DocType at all, it's a client-only column computed via a
+		// separate API call (get_item_stock_qty), so no amount of
+		// metadata loading would resolve it.
+		//
+		// Fixed properly: frappe.model.with_doctype() loads the real
+		// metadata (13 of this grid's 14 fields already match exactly -
+		// confirmed against print_label_item.json) using the exact same
+		// mechanism, and the exact same persisted column preferences
+		// (r.user_settings), a real bound document's own child table
+		// would use. The one field with no DocType counterpart (stock_qty)
+		// gets a synthetic entry added to Frappe's own docfield cache,
+		// shaped the same way a real field's would be, so
+		// frappe.meta.get_docfield() resolves it exactly like any other
+		// column instead of returning null.
+		//
+		// Patches header_row.frm only, never grid.frm itself - grid.frm
+		// also gets passed to every DATA row (grid.js's own make_head()/
+		// render_result_rows()), so setting it would re-enable unrelated
+		// frm-gated behavior (field-dependency triggers, dirty-marking)
+		// on every row, not just the header. The cost of that safety: the
+		// grid's own make_head() unconditionally rebuilds a brand new
+		// header_row - reading the still-undefined grid.frm again - on
+		// every refresh() (e.g. Add Row), wiping this patch out each
+		// time. So make_head is wrapped to reapply it after every rebuild,
+		// not just the first one.
+		frappe.model.with_doctype("Print Label Item", () => {
+			frappe.meta.docfield_map["Print Label Item"].stock_qty = {
+				fieldname: "stock_qty",
+				fieldtype: "Float",
+				label: __("Stock Qty"),
+				parent: "Print Label Item",
+				parentfield: "fields",
+				parenttype: "DocType",
+				hidden: 0,
+			};
+
+			const enable_configure_columns = () => {
+				try {
+					const header_row = items_control.grid.header_row;
+					header_row.frm = { doctype: "Print Label Item" };
+					header_row.configure_columns_button && header_row.configure_columns_button.remove();
+					header_row.add_column_configure_button();
+				} catch (e) {
+					// Unsupported on this Frappe build - leave the existing
+					// disabled placeholder exactly as it already renders today.
+					console.warn("Configure Columns not available on this grid:", e);
+				}
+			};
+
+			enable_configure_columns();
+			const original_make_head = items_control.grid.make_head.bind(items_control.grid);
+			items_control.grid.make_head = function () {
+				original_make_head();
+				enable_configure_columns();
+			};
+
+			// "Update"/"Reset to default" saved correctly (header_row.frm
+			// covers that) but never visibly took effect, and reopening
+			// the dialog always showed the same stale values - because
+			// the READ side, grid.js's setup_user_defined_columns(), is
+			// gated the same way: "if (!this.frm) return" - but checked
+			// on the grid itself, not the header row. Patching grid.frm
+			// directly (not just header_row.frm) would fix this, but
+			// grid.frm also feeds grid.refresh()'s own display_status
+			// check and gets passed to every DATA row's own frm - a much
+			// bigger change than this one read path needs, and risks
+			// side effects elsewhere (a wrong display_status could make
+			// the whole grid silently read-only). Instead, swap grid.frm
+			// to this same shim only for the duration of this one call,
+			// then restore it - every other frm-gated path in this grid
+			// stays exactly as it is today.
+			const grid = items_control.grid;
+			const original_setup_user_defined_columns = grid.setup_user_defined_columns.bind(grid);
+			grid.setup_user_defined_columns = function () {
+				const real_frm = this.frm;
+				this.frm = { doctype: "Print Label Item" };
+				try {
+					original_setup_user_defined_columns();
+				} finally {
+					this.frm = real_frm;
+				}
+			};
+		});
 	});
 };
 
