@@ -391,6 +391,11 @@ barcodes_print.print_barcode_page.render = function (page) {
 		.css({ "max-width": "1400px", margin: "0 auto", "padding-top": "10px" })
 		.appendTo(page.main);
 
+	// Hints that the Barcode cell is clickable (reopens the barcode-choice
+	// dialog) - the click handler itself is wired up further down, once
+	// the grid exists.
+	$("<style>.print-barcode-page .grid-static-col[data-fieldname='barcode'] { cursor: pointer; }</style>").appendTo($wrapper);
+
 	const $source_banner = $("<div>").appendTo($wrapper);
 
 	$(`<p class="text-muted">${__(
@@ -513,6 +518,33 @@ barcodes_print.print_barcode_page.render = function (page) {
 			// only close when the click is genuinely outside every row.
 			if ($(e.target).closest(".grid-row").length) return;
 			open_row.toggle_view(false);
+		});
+
+		// Clicking the Barcode cell itself re-opens the same barcode-choice
+		// dialog prompt_barcode_choice() already shows automatically for an
+		// ambiguous item (2+ barcodes, none marked Default) - on demand,
+		// for every row, always (even a single-barcode row, where the
+		// dialog trivially offers just that one choice), and always
+		// listing every barcode the item has, including whichever one is
+		// currently selected/Default, so switching to or back to any of
+		// them is unrestricted. Delegated on $wrapper (not bound per-row)
+		// so it keeps working for rows added/removed after this runs,
+		// with no re-binding needed. stopPropagation keeps this from also
+		// triggering the row's own open-row click handling - same
+		// click-to-pick pattern as the Item field's own Link control.
+		$wrapper.on("click", ".grid-static-col[data-fieldname='barcode']", function (e) {
+			e.stopPropagation();
+			const row = $(this).closest(".grid-row").data("grid_row");
+			if (!row || !row.doc || !row.doc.item) return;
+			frappe.call({
+				method: "barcodes_print.api.item.get_item_barcode_details",
+				args: { item_code: row.doc.item },
+				callback(r) {
+					const choices = (r.message || {}).barcodes || [];
+					if (!choices.length) return;
+					barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
+				},
+			});
 		});
 
 		// Real Frappe "Configure Columns" - the actual core dialog, not a

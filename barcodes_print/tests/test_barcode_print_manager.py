@@ -1106,7 +1106,26 @@ class TestBarcodePrintManager(FrappeTestCase):
 		settings_doc.purchase_document_type = "Purchase Order"
 		settings_doc.save(ignore_permissions=True)
 
-		item_code = self._create_test_item_with_barcode()
+		# A fractional qty needs a UOM that actually allows it - "Nos" (the
+		# other test items' default stock_uom) has "Must be Whole Number"
+		# set in ERPNext's own fixtures, which would reject 15.05 outright
+		# before this code ever runs. Create a dedicated one rather than
+		# assume any particular UOM (e.g. "Kg") already exists on a fresh
+		# site - UOM's own must_be_whole_number field defaults to 0.
+		uom = f"TEST-FRACTIONAL-UOM-{frappe.generate_hash(length=6)}"
+		if not frappe.db.exists("UOM", uom):
+			frappe.get_doc({"doctype": "UOM", "uom_name": uom}).insert(ignore_permissions=True)
+
+		item_code = f"TEST-ITEM-FRACTIONAL-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "Test Fractional Qty Item",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": uom,
+			"barcodes": [{"barcode": _random_ean13(), "barcode_type": "EAN-13"}],
+		}).insert(ignore_permissions=True)
 		po = self._create_purchase_order([{"item_code": item_code, "qty": 15.05, "rate": 10}])
 
 		try:
