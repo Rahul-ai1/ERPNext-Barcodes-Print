@@ -108,7 +108,7 @@ Built and tested against **Frappe v16.26 / ERPNext v16.26**, with CI running the
 ## Install
 
 ```bash
-bench get-app https://github.com/Rahul-ai1/ERPNext-Barcodes-Print.git
+bench get-app --branch prod https://github.com/Rahul-ai1/ERPNext-Barcodes-Print.git
 bench --site <your-site> install-app barcodes_print
 bench --site <your-site> migrate
 bench restart
