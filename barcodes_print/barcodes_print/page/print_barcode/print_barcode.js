@@ -564,32 +564,25 @@ barcodes_print.print_barcode_page.IMPORT_TEMPLATE_COLUMNS = [
 	"item_code", "barcode", "no_of_barcodes", "price_list", "company", "tax_template", "batch_no", "serial_nos",
 ];
 
-// Styled as real buttons, matching the native Frappe grid's own
-// Download/Upload bulk-edit buttons (see frappe/public/js/frappe/form/grid.js
-// setup_allow_bulk_edit/setup_download) - that native mechanism itself can't
-// be reused here, since it requires a real bound frm (this grid is a
-// standalone control with nothing saved as a document), so this wires the
-// same visual button component to this app's own import/export endpoints.
+// Plain Bootstrap buttons, not frappe.ui.button() - that helper
+// (frappe/public/js/frappe/ui/components/button.js) is a v16-only addition
+// and doesn't exist on Frappe v15 at all, which threw here and silently
+// skipped every call after it in the same chain (render_scan_box,
+// update_total, render_my_printer) too. frappe.utils.icon() and .btn/
+// .btn-default are long-standing APIs present identically on both versions.
 barcodes_print.print_barcode_page.render_import_export = function () {
 	const state = barcodes_print.print_barcode_page._state;
 	state.$import_area.empty();
-	frappe.ui
-		.button({
-			label: __("Load from File"),
-			icon: "upload",
-			variant: "outline",
-			onclick: () => barcodes_print.print_barcode_page.prompt_import_file(),
-		})
-		.css("margin-right", "8px")
-		.appendTo(state.$import_area);
-	frappe.ui
-		.button({
-			label: __("Download Template"),
-			icon: "download",
-			variant: "outline",
-			onclick: () => barcodes_print.print_barcode_page.download_import_template(),
-		})
-		.appendTo(state.$import_area);
+	$(`<button class="btn btn-default btn-sm" style="margin-right: 8px;">
+			${frappe.utils.icon("upload", "xs")} ${__("Load from File")}
+		</button>`)
+		.appendTo(state.$import_area)
+		.on("click", () => barcodes_print.print_barcode_page.prompt_import_file());
+	$(`<button class="btn btn-default btn-sm">
+			${frappe.utils.icon("download", "xs")} ${__("Download Template")}
+		</button>`)
+		.appendTo(state.$import_area)
+		.on("click", () => barcodes_print.print_barcode_page.download_import_template());
 };
 
 barcodes_print.print_barcode_page.prompt_import_file = function () {
