@@ -56,18 +56,19 @@ doc_events = {
 }
 
 doctype_js = {
-	# Purchase Order/Purchase Receipt/Subcontracting Order are core ERPNext
-	# doctypes this app doesn't own - a real committed file via doctype_js,
-	# never a Client Script. All three files run on every submitted
-	# document of that type regardless of settings; the "Print Barcode"
-	# button itself only appears when Barcode Print Settings enables it for
-	# that doctype (see public/js/purchase_barcode_button.js). Subcontracting
-	# Order support is unconditional whenever the master switch is on - it's
-	# the subcontracted-Purchase-Order exception, not an alternative choice
-	# alongside Purchase Order/Purchase Receipt.
+	# Core ERPNext doctypes this app doesn't own - a real committed file via
+	# doctype_js, never a Client Script. Every file here runs on every
+	# submitted document of that type regardless of settings; the "Print
+	# Barcode" button itself only appears when Barcode Print Settings
+	# enables it for that doctype (see public/js/purchase_barcode_button.js).
+	# Purchase Order/Purchase Receipt/Purchase Invoice share one single-select
+	# (purchase_document_type); Subcontracting Order/Subcontracting Receipt
+	# share a separate one (subcontracting_document_type) - independent
+	# master switches, so either pair can be on, off, or both at once.
 	"Purchase Order": "public/js/purchase_order.js",
 	"Purchase Receipt": "public/js/purchase_receipt.js",
 	"Purchase Invoice": "public/js/purchase_invoice.js",
 	"Subcontracting Order": "public/js/subcontracting_order.js",
+	"Subcontracting Receipt": "public/js/subcontracting_receipt.js",
 }
 

@@ -107,6 +107,16 @@ class TestBarcodePrintManager(FrappeTestCase):
 					"doctype": "UOM",
 					"uom_name": uom,
 				}).insert(ignore_permissions=True)
+		if not frappe.db.exists("Party Type", "Supplier"):
+			# Purchase Invoice submission posts GL Entries against this
+			# Supplier, and GL Entry.validate_party() rejects any
+			# party_type not registered here - also normally seeded by
+			# the setup wizard, not by install-app alone.
+			frappe.get_doc({
+				"doctype": "Party Type",
+				"party_type": "Supplier",
+				"account_type": "Payable",
+			}).insert(ignore_permissions=True)
 		if not frappe.db.exists("Supplier Group", "All Supplier Groups"):
 			frappe.get_doc({
 				"doctype": "Supplier Group",
@@ -219,11 +229,26 @@ class TestBarcodePrintManager(FrappeTestCase):
 		existing = frappe.get_all("Supplier", limit=1)
 		if existing:
 			return existing[0].name
-		supplier_group = frappe.get_all("Supplier Group", limit=1)
+		# "All Supplier Groups" is the group-type root node this same test
+		# file creates above - only ever a parent, never assignable to a
+		# real Supplier. An unfiltered query can return that root instead
+		# of a real leaf group (confirmed on Frappe v15, where ERPNext's own
+		# test fixtures create a leaf as its child) - filter to leaves only,
+		# and create one if none exist, rather than falling back to the root.
+		supplier_group = frappe.get_all("Supplier Group", filters={"is_group": 0}, limit=1)
+		if supplier_group:
+			supplier_group_name = supplier_group[0].name
+		else:
+			supplier_group_name = frappe.get_doc({
+				"doctype": "Supplier Group",
+				"supplier_group_name": "_Test Supplier Group",
+				"parent_supplier_group": "All Supplier Groups",
+				"is_group": 0,
+			}).insert(ignore_permissions=True).name
 		return frappe.get_doc({
 			"doctype": "Supplier",
 			"supplier_name": "_Test Supplier",
-			"supplier_group": supplier_group[0].name if supplier_group else "All Supplier Groups",
+			"supplier_group": supplier_group_name,
 			"supplier_type": "Company",
 		}).insert(ignore_permissions=True).name
 
@@ -1072,6 +1097,47 @@ class TestBarcodePrintManager(FrappeTestCase):
 	def test_get_barcode_print_settings_defaults_price_label_to_rate(self):
 		self.assertEqual(get_barcode_print_settings()["price_label"], "Rate")
 
+	def test_get_purchase_document_items_rounds_fractional_qty_upward(self):
+		"""A label can't be a fraction of itself - 15.05 must suggest 16
+		labels, not 15 (plain truncation would silently leave 0.05 of a
+		unit unlabelled)."""
+		settings_doc = frappe.get_single("Barcode Print Settings")
+		settings_doc.enable_purchase_document_printing = 1
+		settings_doc.purchase_document_type = "Purchase Order"
+		settings_doc.save(ignore_permissions=True)
+
+		# A fractional qty needs a UOM that actually allows it - "Nos" (the
+		# other test items' default stock_uom) has "Must be Whole Number"
+		# set in ERPNext's own fixtures, which would reject 15.05 outright
+		# before this code ever runs. Create a dedicated one rather than
+		# assume any particular UOM (e.g. "Kg") already exists on a fresh
+		# site - UOM's own must_be_whole_number field defaults to 0.
+		uom = f"TEST-FRACTIONAL-UOM-{frappe.generate_hash(length=6)}"
+		if not frappe.db.exists("UOM", uom):
+			frappe.get_doc({"doctype": "UOM", "uom_name": uom}).insert(ignore_permissions=True)
+
+		item_code = f"TEST-ITEM-FRACTIONAL-{frappe.generate_hash(length=6)}"
+		frappe.get_doc({
+			"doctype": "Item",
+			"item_code": item_code,
+			"item_name": "Test Fractional Qty Item",
+			"item_group": "All Item Groups",
+			"is_sales_item": 0,
+			"stock_uom": uom,
+			"barcodes": [{"barcode": _random_ean13(), "barcode_type": "EAN-13"}],
+		}).insert(ignore_permissions=True)
+		po = self._create_purchase_order([{"item_code": item_code, "qty": 15.05, "rate": 10}])
+
+		try:
+			prefill = get_purchase_document_items("Purchase Order", po.name)
+			self.assertEqual(prefill["items"][0]["no_of_barcodes"], 16)
+		finally:
+			po.cancel()
+			frappe.delete_doc("Purchase Order", po.name, force=True, ignore_permissions=True)
+			settings_doc.enable_purchase_document_printing = 0
+			settings_doc.purchase_document_type = ""
+			settings_doc.save(ignore_permissions=True)
+
 	def test_get_purchase_document_items_fetches_company_and_tax_template_per_line(self):
 		"""Company/Tax Template are auto-fetched straight from the Purchase
 		Order's own document/line - never a user or site default."""
@@ -1513,8 +1579,10 @@ class TestBarcodePrintManager(FrappeTestCase):
 
 	def test_is_purchase_print_enabled_for_purchase_invoice(self):
 		"""Purchase Invoice behaves as a normal alternative choice alongside
-		Purchase Order/Purchase Receipt - on only when Settings points at it,
-		not unconditional like Subcontracting Order."""
+		Purchase Order/Purchase Receipt - on only when Settings points at it.
+		Subcontracting Order/Receipt are a fully independent pair with their
+		own master switch, untouched by the Purchase one here - off by
+		default since enable_subcontracting_document_printing isn't set."""
 		settings_doc = frappe.get_single("Barcode Print Settings")
 		settings_doc.enable_purchase_document_printing = 1
 		settings_doc.purchase_document_type = "Purchase Invoice"
@@ -1524,7 +1592,7 @@ class TestBarcodePrintManager(FrappeTestCase):
 			self.assertTrue(is_purchase_print_enabled_for("Purchase Invoice"))
 			self.assertFalse(is_purchase_print_enabled_for("Purchase Order"))
 			self.assertFalse(is_purchase_print_enabled_for("Purchase Receipt"))
-			self.assertTrue(is_purchase_print_enabled_for("Subcontracting Order"))
+			self.assertFalse(is_purchase_print_enabled_for("Subcontracting Order"))
 		finally:
 			settings_doc.enable_purchase_document_printing = 0
 			settings_doc.purchase_document_type = ""
@@ -1578,22 +1646,36 @@ class TestBarcodePrintManager(FrappeTestCase):
 			pi.cancel()
 			frappe.delete_doc("Purchase Invoice", pi.name, force=True, ignore_permissions=True)
 
-	def test_is_purchase_print_enabled_for_subcontracting_order_is_unconditional(self):
-		"""Subcontracting Order isn't an alternative choice alongside
-		Purchase Order/Purchase Receipt in the settings - it's always on
-		once purchase-document printing is enabled at all."""
+	def test_is_purchase_print_enabled_for_subcontracting_is_independent_of_purchase(self):
+		"""Subcontracting Order/Receipt are gated by their own separate
+		master switch (enable_subcontracting_document_printing +
+		subcontracting_document_type) - fully independent of the Purchase
+		Document pair, not unconditional and not tied to it either way."""
 		settings_doc = frappe.get_single("Barcode Print Settings")
 		settings_doc.enable_purchase_document_printing = 1
 		settings_doc.purchase_document_type = "Purchase Receipt"
 		settings_doc.save(ignore_permissions=True)
 
 		try:
-			self.assertTrue(is_purchase_print_enabled_for("Subcontracting Order"))
+			# Purchase-only settings touched so far - subcontracting stays off.
+			self.assertFalse(is_purchase_print_enabled_for("Subcontracting Order"))
+			self.assertFalse(is_purchase_print_enabled_for("Subcontracting Receipt"))
 			self.assertFalse(is_purchase_print_enabled_for("Purchase Order"))
+			self.assertTrue(is_purchase_print_enabled_for("Purchase Receipt"))
+
+			# Enabling subcontracting independently doesn't disturb Purchase.
+			settings_doc.enable_subcontracting_document_printing = 1
+			settings_doc.subcontracting_document_type = "Subcontracting Order"
+			settings_doc.save(ignore_permissions=True)
+
+			self.assertTrue(is_purchase_print_enabled_for("Subcontracting Order"))
+			self.assertFalse(is_purchase_print_enabled_for("Subcontracting Receipt"))
 			self.assertTrue(is_purchase_print_enabled_for("Purchase Receipt"))
 		finally:
 			settings_doc.enable_purchase_document_printing = 0
 			settings_doc.purchase_document_type = ""
+			settings_doc.enable_subcontracting_document_printing = 0
+			settings_doc.subcontracting_document_type = ""
 			settings_doc.save(ignore_permissions=True)
 
 	def test_mm_to_dots_conversion(self):
@@ -1677,6 +1759,16 @@ class TestBarcodePrintManager(FrappeTestCase):
 		other_item = self._create_test_item_with_barcode()
 		with self.assertRaises(frappe.ValidationError):
 			resolve_row(other_item, no_of_barcodes=1, batch_no=batch_no)
+
+	def test_resolve_row_blocks_disabled_item(self):
+		"""The grid's own Item picker already filters these out and
+		resolve_scan blocks them too when scanned - this is the last-resort
+		safety net right before a label would actually be built, for a row
+		typed in directly or left over from before the Item was disabled."""
+		item_code = self._create_test_item_with_barcode()
+		frappe.db.set_value("Item", item_code, "disabled", 1)
+		with self.assertRaises(frappe.ValidationError):
+			resolve_row(item_code, no_of_barcodes=1)
 
 	def test_resolve_row_encodes_serial_no_and_inherits_its_batch(self):
 		"""One Serial No always means exactly one physical unit - no_of_barcodes

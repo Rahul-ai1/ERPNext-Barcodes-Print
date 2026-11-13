@@ -181,6 +181,9 @@ barcodes_print.print_barcode_page.get_item_fields = function (default_price_list
 			in_list_view: 1,
 			label: __("Item"),
 			reqd: 1,
+			get_query: function () {
+				return { filters: { disabled: 0 } };
+			},
 			onchange: function () {
 				const row = this.grid_row;
 				const item_code = this.value;
@@ -391,6 +394,21 @@ barcodes_print.print_barcode_page.render = function (page) {
 		.css({ "max-width": "1400px", margin: "0 auto", "padding-top": "10px" })
 		.appendTo(page.main);
 
+	// Hints that the Barcode cell is clickable (reopens the barcode-choice
+	// dialog) - the click handler itself is wired up further down, once
+	// the grid exists. The cell's visible surface is a real <input
+	// disabled> (this field is read_only) - a genuinely disabled form
+	// control never dispatches click events in the browser at all, not
+	// even to ancestor listeners via delegation, so the click would
+	// silently never reach $wrapper's handler without this: pointer-events:
+	// none lets the click pass straight through the input to the
+	// .grid-static-col wrapper div underneath, which isn't disabled and
+	// bubbles normally.
+	$(`<style>
+		.print-barcode-page .grid-static-col[data-fieldname='barcode'] { cursor: pointer; }
+		.print-barcode-page .grid-static-col[data-fieldname='barcode'] input:disabled { pointer-events: none; }
+	</style>`).appendTo($wrapper);
+
 	const $source_banner = $("<div>").appendTo($wrapper);
 
 	$(`<p class="text-muted">${__(
@@ -487,6 +505,170 @@ barcodes_print.print_barcode_page.render = function (page) {
 
 		barcodes_print.print_barcode_page.update_total();
 		barcodes_print.print_barcode_page.render_my_printer();
+
+		// Clicking anywhere outside an open grid row's own form closes it -
+		// matching every real document's child table. Frappe's own version
+		// of this (dom.js freeze()'s backdrop) only fires through the
+		// global cur_frm, which this page never sets since it's a
+		// standalone page with no document bound to it - so it's wired up
+		// directly here instead, scoped to this page and this grid only.
+		// Bound on document, not $wrapper - freeze()'s own backdrop is
+		// appended straight to <body> (a sibling of $wrapper, not inside
+		// it) while a row is open, so a click there would never reach a
+		// $wrapper-scoped listener. Escape key already works today via
+		// keyboard.js checking .grid-row-open directly, not cur_frm -
+		// untouched by this.
+		// Namespaced and re-bound (not accumulated) each time this page
+		// renders, since render() can run more than once per Desk session
+		// (e.g. revisiting the page) and the listener is on document, not
+		// on $wrapper, so page.main.empty() alone wouldn't clean it up.
+		$(document).off("click.print_barcode_grid_close").on("click.print_barcode_grid_close", (e) => {
+			const open_row = frappe.ui.form.get_open_grid_form();
+			if (!open_row || open_row.grid !== items_control.grid) return;
+			// Clicking inside the open row's own form, or on any row
+			// (including a different one, to switch directly to it) is
+			// already handled by the grid's own native click handling -
+			// only close when the click is genuinely outside every row.
+			if ($(e.target).closest(".grid-row").length) return;
+			open_row.toggle_view(false);
+		});
+
+		// Clicking the Barcode cell itself re-opens the same barcode-choice
+		// dialog prompt_barcode_choice() already shows automatically for an
+		// ambiguous item (2+ barcodes, none marked Default) - on demand,
+		// for every row, always (even a single-barcode row, where the
+		// dialog trivially offers just that one choice), and always
+		// listing every barcode the item has, including whichever one is
+		// currently selected/Default, so switching to or back to any of
+		// them is unrestricted.
+		//
+		// Bound on the capture phase via a native addEventListener, not
+		// jQuery's own (bubble-phase only) delegation - this grid runs in
+		// Frappe's "editable grid" mode, where grid_row.js's own native
+		// per-cell click handler (toggle_editable_row, bound directly on
+		// each cell) returns false whenever allow_on_grid_editing() &&
+		// is_editable() are both true, which they are here. A jQuery
+		// handler returning false is preventDefault()+stopPropagation()
+		// together - it kills the event before it can ever bubble up to a
+		// $wrapper-level handler, confirmed live (a bubble-phase listener
+		// on document never saw the click at all). Capture phase runs
+		// top-down, before that native handler gets a chance to act, so
+		// it sees the click unconditionally - stopPropagation here (still
+		// in capture) then correctly prevents that native handler from
+		// also firing for this one click, same as the old approach
+		// intended, just from the phase that actually works.
+		$wrapper[0].addEventListener(
+			"click",
+			(e) => {
+				const cell = e.target.closest(".grid-static-col[data-fieldname='barcode']");
+				if (!cell) return;
+				e.stopPropagation();
+				const row = $(cell).closest(".grid-row").data("grid_row");
+				if (!row || !row.doc || !row.doc.item) return;
+				frappe.call({
+					method: "barcodes_print.api.item.get_item_barcode_details",
+					args: { item_code: row.doc.item },
+					callback(r) {
+						const choices = (r.message || {}).barcodes || [];
+						if (!choices.length) return;
+						barcodes_print.print_barcode_page.prompt_barcode_choice(row, choices);
+					},
+				});
+			},
+			true
+		);
+
+		// Real Frappe "Configure Columns" - the actual core dialog, not a
+		// reimplementation. First attempt (giving header_row a frm shim
+		// alone) rendered the icon correctly on both versions, but opening
+		// the dialog crashed on both: render_selected_columns() calls
+		// frappe.meta.get_docfield("Print Label Item", fieldname), which
+		// needs that DocType's real metadata loaded client-side first
+		// (never happens on this page, since nothing here is ever loaded
+		// as a real document) - and "Stock Qty" isn't a real field on
+		// that DocType at all, it's a client-only column computed via a
+		// separate API call (get_item_stock_qty), so no amount of
+		// metadata loading would resolve it.
+		//
+		// Fixed properly: frappe.model.with_doctype() loads the real
+		// metadata (13 of this grid's 14 fields already match exactly -
+		// confirmed against print_label_item.json) using the exact same
+		// mechanism, and the exact same persisted column preferences
+		// (r.user_settings), a real bound document's own child table
+		// would use. The one field with no DocType counterpart (stock_qty)
+		// gets a synthetic entry added to Frappe's own docfield cache,
+		// shaped the same way a real field's would be, so
+		// frappe.meta.get_docfield() resolves it exactly like any other
+		// column instead of returning null.
+		//
+		// Patches header_row.frm only, never grid.frm itself - grid.frm
+		// also gets passed to every DATA row (grid.js's own make_head()/
+		// render_result_rows()), so setting it would re-enable unrelated
+		// frm-gated behavior (field-dependency triggers, dirty-marking)
+		// on every row, not just the header. The cost of that safety: the
+		// grid's own make_head() unconditionally rebuilds a brand new
+		// header_row - reading the still-undefined grid.frm again - on
+		// every refresh() (e.g. Add Row), wiping this patch out each
+		// time. So make_head is wrapped to reapply it after every rebuild,
+		// not just the first one.
+		frappe.model.with_doctype("Print Label Item", () => {
+			frappe.meta.docfield_map["Print Label Item"].stock_qty = {
+				fieldname: "stock_qty",
+				fieldtype: "Float",
+				label: __("Stock Qty"),
+				parent: "Print Label Item",
+				parentfield: "fields",
+				parenttype: "DocType",
+				hidden: 0,
+			};
+
+			const enable_configure_columns = () => {
+				try {
+					const header_row = items_control.grid.header_row;
+					header_row.frm = { doctype: "Print Label Item" };
+					header_row.configure_columns_button && header_row.configure_columns_button.remove();
+					header_row.add_column_configure_button();
+				} catch (e) {
+					// Unsupported on this Frappe build - leave the existing
+					// disabled placeholder exactly as it already renders today.
+					console.warn("Configure Columns not available on this grid:", e);
+				}
+			};
+
+			enable_configure_columns();
+			const original_make_head = items_control.grid.make_head.bind(items_control.grid);
+			items_control.grid.make_head = function () {
+				original_make_head();
+				enable_configure_columns();
+			};
+
+			// "Update"/"Reset to default" saved correctly (header_row.frm
+			// covers that) but never visibly took effect, and reopening
+			// the dialog always showed the same stale values - because
+			// the READ side, grid.js's setup_user_defined_columns(), is
+			// gated the same way: "if (!this.frm) return" - but checked
+			// on the grid itself, not the header row. Patching grid.frm
+			// directly (not just header_row.frm) would fix this, but
+			// grid.frm also feeds grid.refresh()'s own display_status
+			// check and gets passed to every DATA row's own frm - a much
+			// bigger change than this one read path needs, and risks
+			// side effects elsewhere (a wrong display_status could make
+			// the whole grid silently read-only). Instead, swap grid.frm
+			// to this same shim only for the duration of this one call,
+			// then restore it - every other frm-gated path in this grid
+			// stays exactly as it is today.
+			const grid = items_control.grid;
+			const original_setup_user_defined_columns = grid.setup_user_defined_columns.bind(grid);
+			grid.setup_user_defined_columns = function () {
+				const real_frm = this.frm;
+				this.frm = { doctype: "Print Label Item" };
+				try {
+					original_setup_user_defined_columns();
+				} finally {
+					this.frm = real_frm;
+				}
+			};
+		});
 	});
 };
 
@@ -564,32 +746,25 @@ barcodes_print.print_barcode_page.IMPORT_TEMPLATE_COLUMNS = [
 	"item_code", "barcode", "no_of_barcodes", "price_list", "company", "tax_template", "batch_no", "serial_nos",
 ];
 
-// Styled as real buttons, matching the native Frappe grid's own
-// Download/Upload bulk-edit buttons (see frappe/public/js/frappe/form/grid.js
-// setup_allow_bulk_edit/setup_download) - that native mechanism itself can't
-// be reused here, since it requires a real bound frm (this grid is a
-// standalone control with nothing saved as a document), so this wires the
-// same visual button component to this app's own import/export endpoints.
+// Plain Bootstrap buttons, not frappe.ui.button() - that helper
+// (frappe/public/js/frappe/ui/components/button.js) is a v16-only addition
+// and doesn't exist on Frappe v15 at all, which threw here and silently
+// skipped every call after it in the same chain (render_scan_box,
+// update_total, render_my_printer) too. frappe.utils.icon() and .btn/
+// .btn-default are long-standing APIs present identically on both versions.
 barcodes_print.print_barcode_page.render_import_export = function () {
 	const state = barcodes_print.print_barcode_page._state;
 	state.$import_area.empty();
-	frappe.ui
-		.button({
-			label: __("Load from File"),
-			icon: "upload",
-			variant: "outline",
-			onclick: () => barcodes_print.print_barcode_page.prompt_import_file(),
-		})
-		.css("margin-right", "8px")
-		.appendTo(state.$import_area);
-	frappe.ui
-		.button({
-			label: __("Download Template"),
-			icon: "download",
-			variant: "outline",
-			onclick: () => barcodes_print.print_barcode_page.download_import_template(),
-		})
-		.appendTo(state.$import_area);
+	$(`<button class="btn btn-default btn-sm" style="margin-right: 8px;">
+			${frappe.utils.icon("upload", "xs")} ${__("Load from File")}
+		</button>`)
+		.appendTo(state.$import_area)
+		.on("click", () => barcodes_print.print_barcode_page.prompt_import_file());
+	$(`<button class="btn btn-default btn-sm">
+			${frappe.utils.icon("download", "xs")} ${__("Download Template")}
+		</button>`)
+		.appendTo(state.$import_area)
+		.on("click", () => barcodes_print.print_barcode_page.download_import_template());
 };
 
 barcodes_print.print_barcode_page.prompt_import_file = function () {
